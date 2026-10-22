@@ -32,3 +32,44 @@ Warm bone ground, near-black structures, #FF5A00 accents.
 ## Verify
 `npm install && npm run build` must pass; `vite preview` must serve
 HTTP 200 with the page title. Then commit + push to `main`.
+
+---
+
+# PLAN — V2: Bruno-Level Upgrade
+
+## Physics (Rapier, @dimforge/rapier3d-compat)
+- `src/physics/PhysicsWorld.js` — RAPIER.init, fixed-timestep (1/60, clamped
+  accumulator) world, EventQueue collision events, static/dynamic registration,
+  downward raycast for ground/slope, dynamics sync in exactly one place.
+- Car stays a *dynamic rigid body* (cuboid, rotations locked to Y, CCD on) with
+  authored arcade control per physics substep: speed state (accel/brake/reverse/
+  drag/handbrake) -> velocity projected onto the ground plane (so ramps climb),
+  heading state -> body yaw. Physics owns contacts: dynamic cones/crates get
+  knocked over, walls block + thud, ramps are rotated fixed colliders you can
+  drive up and launch off. (Director/gameplay-skills pattern for arcade vehicles.)
+
+## Car detail
+Clearcoat orange paint (MeshPhysicalMaterial), glass cabin, hood/bumpers/
+spoiler/mirrors, spoked wheels, real SpotLight headlights + glow, brake-light
+emissive on brake, visual suspension (squash on land, pitch/roll lean).
+
+## World detail
+Canvas textures (asphalt, bone ground, plaza tiles, lit-window facades),
+instanced trees (~64) + rocks (~40), more varied buildings, lamp glow sprites,
+clouds drifting, perimeter hills, wedge ramps (physics colliders), dynamic
+cones + crate stacks, collectible star per zone.
+
+## Graphics
+ACESFilmic tone mapping, PCFSoft shadows, gradient sky dome, fog, HUD quality
+toggle (High: dpr<=2 + shadows / Low: dpr 1 + no shadows).
+
+## Audio (all synthesized WebAudio, `src/audio/AudioEngine.js`)
+Engine hum (pitch <- speed), skid noise (handbrake slide), collision thud,
+zone chime, star pickup blip, honk. Master mute: L key + HUD button.
+
+## Game feel
+FOV kick with speed, dust particles (drift / landing / impacts,
+`src/fx/Dust.js`), achievement toasts + star counter, animated zone panels.
+
+## Verify
+`npm run build` green + `vite preview` curl 200 -> commit -> push -> verify.

@@ -2,13 +2,37 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 <title>MERUGU — 3D World Portfolio</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='%23ff5a00'/%3E%3Ctext x='50' y='70' font-size='60' font-family='sans-serif' font-weight='900' text-anchor='middle' fill='%23121212'%3EM%3C/text%3E%3C/svg%3E" />
 <link rel="stylesheet" href="/src/style.css" />
+<script>
+  // Error trap: failures are NEVER a silent black screen.
+  window.__errors = [];
+  window.__showError = function (msg) {
+    window.__errors.push(String(msg));
+    var box = document.getElementById('errbox');
+    if (!box) {
+      box = document.createElement('div');
+      box.id = 'errbox';
+      box.style.cssText = 'position:fixed;left:12px;bottom:12px;z-index:99;max-width:92vw;background:#b00020;color:#fff;font:600 13px/1.5 system-ui,sans-serif;padding:10px 14px;border:3px solid #121212;white-space:pre-wrap;';
+      document.body.appendChild(box);
+    }
+    box.textContent = '⚠ Something failed to load:\n' + window.__errors.slice(-3).join('\n');
+    box.style.display = 'block';
+  };
+  window.addEventListener('error', function (e) {
+    if (e.message) window.__showError(e.message);
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    window.__showError('Promise failed: ' + (e.reason && e.reason.message ? e.reason.message : e.reason));
+  });
+</script>
 </head>
 <body>
 <div id="app"></div>
 <div id="hud"></div>
+<div id="smoke" style="display:none"></div>
 <script type="module" src="/src/main.js"></script>
 </body>
 </html>

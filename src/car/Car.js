@@ -1,7 +1,11 @@
-// Car.js — original low-poly car + arcade physics + keyboard/touch input.
-// Controls: W/up accel, S/down brake+reverse, A/D steer, Space handbrake+jump,
-// R respawn, H honk. Touch buttons write into the same `input` object.
+// Car.js — detailed low-poly car on a REAL Rapier dynamic rigid body.
+// Arcade control is authored per physics substep (gameplay-skills pattern for
+// arcade vehicles): a speed/heading state writes velocity + yaw into the body;
+// Rapier owns gravity, contacts, ramps, and knocking props around.
+// Falls back to a simple kinematic update if physics failed to initialise —
+// the game must never be a black screen.
 import * as THREE from 'three';
+import RAPIER from '@dimforge/rapier3d-compat';
 import { ORANGE, BLACK, WORLD_SIZE } from '../world/World.js';
 
 const mat = (color, opts = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.6, metalness: 0.1, ...opts });
@@ -13,114 +17,266 @@ const KEYMAP = {
   KeyA: 'left', ArrowLeft: 'left', KeyD: 'right', ArrowRight: 'right', Space: 'handbrake',
 };
 
+const SPAWN = { x: 0, z: 92 };
+const SPAWN_Y = 0.15; // small drop-in on spawn/reset
+const MAX_FWD = 30, MAX_REV = -11; // 30 u/s = 108 km/h on the speedo
+
 export class Car {
-  constructor(scene, colliders) {
-    this.colliders = colliders;
-    this.group = new THREE.Group();
+  constructor(scene, physics, audio) {
+    this.physics = physics || null;
+    this.audio = audio || null;
+    this.group = new THREE.Group();      // physics yaw + position
+    this.bodyG = new THREE.Group();      // visual lean / pitch / suspension bounce
+    this.group.add(this.bodyG);
     this.buildMesh();
     scene.add(this.group);
+
+    this.heading = 0; this.speed = 0; this.steer = 0;
+    this.pos = new THREE.Vector3(SPAWN.x, 0, SPAWN.z);
+    this.y = 0; this.vy = 0;
+    this.grounded = true; this.drifting = false;
+    this.jumpQueued = false; this.squash = 0; this.wasGrounded = true; this.prevVy = 0;
+    this.landedFlag = false; this.impactFlag = 0;
+    this._fwd = new THREE.Vector3();
+
+    if (this.physics) this.buildBody();
     this.reset();
-    this.vy = 0; this.y = 0; this.audio = null;
 
     window.addEventListener('keydown', (e) => {
+      if (this.audio) this.audio.ensure();
       if (KEYMAP[e.code]) { input[KEYMAP[e.code]] = true; e.preventDefault(); }
+      if (e.code === 'Space') this.jumpQueued = true;
       if (e.code === 'KeyR') this.reset();
-      if (e.code === 'KeyH') this.honk();
-      if (e.code === 'Space' && this.y === 0) this.vy = 7.5;
+      if (e.code === 'KeyH' && this.audio) this.audio.honk();
     });
     window.addEventListener('keyup', (e) => { if (KEYMAP[e.code]) input[KEYMAP[e.code]] = false; });
+    window.addEventListener('blur', () => { for (const k in input) input[k] = false; });
   }
 
-  buildMesh() {
-    const g = this.group;
-    const body = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.62, 3.9), mat(ORANGE, { roughness: 0.35 }));
-    body.position.y = 0.62; body.castShadow = true; g.add(body);
-    const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.6, 1.9), mat(BLACK, { roughness: 0.2 }));
-    cabin.position.set(0, 1.2, -0.2); cabin.castShadow = true; g.add(cabin);
-    const stripe = new THREE.Mesh(new THREE.BoxGeometry(2.16, 0.18, 1.1), mat(BLACK));
-    stripe.position.set(0, 0.55, 1.25); g.add(stripe);
-    for (const s of [-1, 1]) { // headlights
-      const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.2, 0.08), mat(0xffe9a8, { emissive: 0xffc84d, emissiveIntensity: 1.4 }));
-      lamp.position.set(s * 0.65, 0.72, -1.97); g.add(lamp);
-    }
-    this.wheels = []; this.frontWheels = [];
-    const wheelGeo = new THREE.CylinderGeometry(0.42, 0.42, 0.32, 14);
-    wheelGeo.rotateZ(Math.PI / 2);
-    for (const [x, z, front] of [[-1.02, -1.3, true], [1.02, -1.3, true], [-1.02, 1.3, false], [1.02, 1.3, false]]) {
-      const pivot = new THREE.Group(); pivot.position.set(x, 0.42, z);
-      const w = new THREE.Mesh(wheelGeo, mat(0x1a1a1a, { roughness: 0.95 }));
-      w.castShadow = true; pivot.add(w); g.add(pivot);
-      this.wheels.push(w); if (front) this.frontWheels.push(pivot);
-    }
+  // ---------------- physics body ----------------
+  buildBody() {
+    const P = this.physics;
+    this.body = P.world.createRigidBody(
+      RAPIER.RigidBodyDesc.dynamic()
+        .setTranslation(SPAWN.x, SPAWN_Y, SPAWN.z)
+        .setLinearDamping(0.02).setAngularDamping(0.9)
+        .enabledRotations(false, true, false)
+        .setCanSleep(false).setCcdEnabled(true));
+    // Collider spans the whole car (wheels to roof) in the body frame, whose
+    // origin is the mesh origin at ground level — so the body rests at y=0.
+    this.collider = P.world.createCollider(
+      RAPIER.ColliderDesc.cuboid(0.98, 0.55, 1.9).setTranslation(0, 0.55, 0)
+        .setDensity(2.2).setFriction(0.25).setRestitution(0.05)
+        .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS),
+      this.body);
+    P.carCollider = this.collider;
+    P.onCarCollision = (other, started) => {
+      if (!started || Math.abs(this.speed) < 4.5) return;
+      const s = Math.min(1, Math.abs(this.speed) / MAX_FWD);
+      if (this.audio) this.audio.thud(0.35 + s * 0.6);
+      this.speed *= 0.55;
+      this.impactFlag = 0.4 + s * 0.6;
+    };
   }
 
   reset() {
-    this.pos = new THREE.Vector3(0, 0, 92);
-    this.heading = 0; // mesh front is -Z; forward = (-sin h, -cos h), so h=0 drives -Z into the world
-    this.speed = 0; this.steer = 0; this.y = 0; this.vy = 0;
+    this.heading = 0; this.speed = 0; this.steer = 0; this.vy = 0; this.jumpQueued = false;
+    if (this.body) {
+      this.body.setTranslation({ x: SPAWN.x, y: SPAWN_Y, z: SPAWN.z }, true);
+      this.body.setRotation({ x: 0, y: 0, z: 0, w: 1 }, true);
+      this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+      this.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    }
+    this.pos.set(SPAWN.x, 0, SPAWN.z); this.y = 0;
+    this.syncVisual(0);
   }
 
-  honk() {
-    try {
-      this.audio = this.audio || new (window.AudioContext || window.webkitAudioContext)();
-      const o = this.audio.createOscillator(), gn = this.audio.createGain();
-      o.type = 'square'; o.frequency.value = 370;
-      gn.gain.setValueAtTime(0.12, this.audio.currentTime);
-      gn.gain.exponentialRampToValueAtTime(0.001, this.audio.currentTime + 0.28);
-      o.connect(gn).connect(this.audio.destination); o.start(); o.stop(this.audio.currentTime + 0.3);
-    } catch { /* audio unavailable — honk silently */ }
-  }
+  queueJump() { this.jumpQueued = true; }
+  honk() { if (this.audio) { this.audio.ensure(); this.audio.honk(); } }
 
-  update(dt) {
-    dt = Math.min(dt, 0.05);
-    // --- steering: ease toward target, less angle at speed ---
+  forward(out) { return out.set(-Math.sin(this.heading), 0, -Math.cos(this.heading)); }
+
+  // ---------------- per-substep control (physics mode) ----------------
+  control(h) {
+    const P = this.physics; if (!P || !this.body) return;
+    const t = this.body.translation();
+
+    // ground probe (origin above the chassis, ground rests at toi ~= 0.7)
+    const hit = P.castDown(t.x, t.y + 0.7, t.z, 1.7, this.collider);
+    this.grounded = !!(hit && hit.toi < 1.32);
+
+    // steering: ease toward target, less angle at speed
     const steerTarget = (input.left ? 1 : 0) - (input.right ? 1 : 0);
-    this.steer += (steerTarget * 0.55 - this.steer) * Math.min(1, dt * 10);
-    const speedFactor = 1 / (1 + Math.abs(this.speed) * 0.045);
+    this.steer += (steerTarget * 0.55 - this.steer) * Math.min(1, h * 10);
+    const speedFactor = 1 / (1 + Math.abs(this.speed) * 0.06);
 
-    // --- longitudinal physics ---
-    const MAX_FWD = 30, MAX_REV = -11;
-    if (input.accel) this.speed += 17 * dt * (this.speed < 0 ? 2.2 : 1); // accel also brakes reverse momentum
-    if (input.brake) this.speed -= (this.speed > 0.5 ? 26 : 9) * dt;    // brake, then reverse
-    this.speed -= this.speed * (input.handbrake ? 2.4 : 0.55) * dt;      // drag / handbrake
-    if (!input.accel && !input.brake) this.speed -= this.speed * 0.35 * dt; // engine braking
+    // longitudinal speed state (V1 tuning — it felt right, response is instant)
+    if (input.accel) this.speed += 24 * h * (this.speed < 0 ? 2.4 : 1); // punchy: ~0-80 km/h in ~1.5 s
+    if (input.brake) this.speed -= (this.speed > 0.5 ? 30 : 10) * h;
+    this.speed -= this.speed * (input.handbrake ? 2.6 : 0.5) * h;
+    if (!input.accel && !input.brake) this.speed -= this.speed * 0.3 * h;
     this.speed = THREE.MathUtils.clamp(this.speed, MAX_REV, MAX_FWD);
     if (Math.abs(this.speed) < 0.04 && !input.accel && !input.brake) this.speed = 0;
 
-    // --- yaw from steering x speed ---
-    if (this.speed !== 0) this.heading += this.steer * speedFactor * this.speed * dt * 0.42;
+    if (this.speed !== 0) this.heading += this.steer * speedFactor * this.speed * h * 0.38 * (this.grounded ? 1 : 0.35);
+    this.drifting = this.grounded && input.handbrake && Math.abs(this.speed) > 6;
 
-    // --- move ---
-    const dx = Math.sin(this.heading) * this.speed * dt;
-    const dz = Math.cos(this.heading) * this.speed * dt;
-    this.pos.x -= dx; this.pos.z -= dz;
-
-    // --- jump / gravity ---
-    if (this.y > 0 || this.vy !== 0) { this.vy -= 22 * dt; this.y += this.vy * dt; if (this.y <= 0) { this.y = 0; this.vy = 0; } }
-
-    // --- collisions: circle vs circle colliders, push out + bounce ---
-    for (const c of this.colliders) {
-      const ddx = this.pos.x - c.x, ddz = this.pos.z - c.z;
-      const rr = c.r + 1.3, d2 = ddx * ddx + ddz * ddz;
-      if (d2 < rr * rr && d2 > 0.0001) {
-        const d = Math.sqrt(d2);
-        this.pos.x = c.x + (ddx / d) * rr; this.pos.z = c.z + (ddz / d) * rr;
-        this.speed *= -0.25; // bounce
+    // write yaw + velocity into the body
+    const yawQ = { x: 0, y: Math.sin(this.heading / 2), z: 0, w: Math.cos(this.heading / 2) };
+    this.body.setRotation(yawQ, true);
+    this.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    const f = this.forward(this._fwd);
+    if (this.grounded) {
+      // project forward onto the ground plane (f' = f - n(f.n)) so the
+      // velocity follows slopes — this is what makes ramps climbable.
+      let fx = f.x, fy = 0, fz = f.z;
+      if (hit && hit.ny < 0.995) {
+        const d = f.x * hit.nx + f.z * hit.nz; // f.y = 0
+        fx = f.x - hit.nx * d; fy = -hit.ny * d; fz = f.z - hit.nz * d;
+        const len = Math.hypot(fx, fy, fz);
+        if (len > 0.001) { fx /= len; fy /= len; fz /= len; } else { fx = f.x; fy = 0; fz = f.z; }
       }
+      let vy = fy * this.speed;
+      if (this.jumpQueued) { vy = 9.5; this.jumpQueued = false; }
+      this.body.setLinvel({ x: fx * this.speed, y: vy, z: fz * this.speed }, true);
+    } else {
+      this.jumpQueued = false;
+      // airborne: leave velocity alone — momentum carries the jump
     }
+  }
 
-    // --- world bounds ---
+  // ---------------- fallback (no physics): V1-style kinematic ----------------
+  updateFallback(dt) {
+    dt = Math.min(dt, 0.05);
+    const steerTarget = (input.left ? 1 : 0) - (input.right ? 1 : 0);
+    this.steer += (steerTarget * 0.55 - this.steer) * Math.min(1, dt * 10);
+    const speedFactor = 1 / (1 + Math.abs(this.speed) * 0.06);
+    if (input.accel) this.speed += 24 * dt * (this.speed < 0 ? 2.4 : 1);
+    if (input.brake) this.speed -= (this.speed > 0.5 ? 30 : 10) * dt;
+    this.speed -= this.speed * (input.handbrake ? 2.6 : 0.5) * dt;
+    if (!input.accel && !input.brake) this.speed -= this.speed * 0.3 * dt;
+    this.speed = THREE.MathUtils.clamp(this.speed, MAX_REV, MAX_FWD);
+    if (Math.abs(this.speed) < 0.04 && !input.accel && !input.brake) this.speed = 0;
+    if (this.speed !== 0) this.heading += this.steer * speedFactor * this.speed * dt * 0.38;
+    this.drifting = input.handbrake && Math.abs(this.speed) > 6 && this.y === 0;
+    const f = this.forward(this._fwd);
+    this.pos.x += f.x * this.speed * dt;
+    this.pos.z += f.z * this.speed * dt;
+    if (this.jumpQueued && this.y === 0) { this.vy = 8.5; this.jumpQueued = false; }
+    if (this.y > 0 || this.vy !== 0) { this.vy -= 22 * dt; this.y += this.vy * dt; if (this.y <= 0) { this.y = 0; this.vy = 0; this.landedFlag = true; } }
     const lim = WORLD_SIZE / 2 - 4;
     this.pos.x = THREE.MathUtils.clamp(this.pos.x, -lim, lim);
     this.pos.z = THREE.MathUtils.clamp(this.pos.z, -lim, lim);
-
-    // --- apply to mesh ---
-    this.group.position.set(this.pos.x, this.y, this.pos.z);
-    this.group.rotation.y = this.heading;
-    this.group.rotation.z = -this.steer * Math.min(1, Math.abs(this.speed) / 22) * 0.07; // body lean
-    for (const p of this.frontWheels) p.rotation.y = this.steer;
-    for (const w of this.wheels) w.rotation.x += (this.speed * dt) / 0.42;
+    this.grounded = this.y === 0;
+    this.syncVisual(dt);
   }
 
+  // ---------------- per-frame sync + visual life ----------------
+  syncVisual(dt) {
+    if (this.body) {
+      const t = this.body.translation();
+      const v = this.body.linvel();
+      this.pos.set(t.x, 0, t.z);
+      this.y = Math.max(0, t.y);
+      this.vy = v.y;
+      // landing?
+      if (!this.wasGrounded && this.grounded && this.prevVy < -7) { this.landedFlag = true; this.squash = 1; if (this.audio) this.audio.thud(0.3); }
+      this.wasGrounded = this.grounded; this.prevVy = v.y;
+      this.group.position.set(t.x, t.y, t.z);
+    } else {
+      this.group.position.set(this.pos.x, this.y, this.pos.z);
+    }
+    this.group.rotation.y = this.heading;
+
+    // suspension squash spring + lean/pitch
+    this.squash = Math.max(0, this.squash - dt * 3.2);
+    const squashY = -Math.sin(Math.min(this.squash, 1) * Math.PI) * 0.13;
+    this.bodyG.position.y = squashY;
+    const speedRatio = Math.abs(this.speed) / MAX_FWD;
+    const targetRoll = -this.steer * speedRatio * 1.6;
+    const targetPitch = (input.accel ? -0.03 : 0) + (input.brake && this.speed > 1 ? 0.045 : 0);
+    this.bodyG.rotation.z += (targetRoll - this.bodyG.rotation.z) * Math.min(1, dt * 8);
+    this.bodyG.rotation.x += (targetPitch - this.bodyG.rotation.x) * Math.min(1, dt * 6);
+
+    // wheels: steer visual + spin
+    for (const p of this.frontWheels) p.rotation.y = this.steer;
+    this._spin = (this._spin || 0) + (this.speed * dt) / 0.42;
+    for (const w of this.spinWheels) w.rotation.x = this._spin;
+
+    // brake lights
+    const braking = input.brake || input.handbrake;
+    this.brakeMat.emissiveIntensity += ((braking ? 3.4 : 0.8) - this.brakeMat.emissiveIntensity) * Math.min(1, dt * 18);
+  }
+
+  consumeLanding() { const f = this.landedFlag; this.landedFlag = false; return f; }
+  consumeImpact() { const f = this.impactFlag; this.impactFlag = 0; return f; }
+
   get kmh() { return Math.round(Math.abs(this.speed) * 3.6); }
+  get speedRatio() { return Math.abs(this.speed) / MAX_FWD; }
+
+  // ---------------- mesh ----------------
+  buildMesh() {
+    const g = this.bodyG;
+    const paint = new THREE.MeshPhysicalMaterial({
+      color: ORANGE, roughness: 0.32, metalness: 0.15, clearcoat: 0.85, clearcoatRoughness: 0.25,
+    });
+    const glass = new THREE.MeshPhysicalMaterial({ color: 0x10161f, roughness: 0.06, metalness: 0.4, clearcoat: 1 });
+    const trim = mat(BLACK, { roughness: 0.5 });
+
+    const add = (geo, material, x, y, z, parent = g) => {
+      const m = new THREE.Mesh(geo, material); m.position.set(x, y, z);
+      m.castShadow = true; parent.add(m); return m;
+    };
+    // main shell + sculpted bits (front = -Z)
+    add(new THREE.BoxGeometry(2.1, 0.55, 3.9), paint, 0, 0.62, 0);
+    add(new THREE.BoxGeometry(1.9, 0.34, 1.35), paint, 0, 0.48, -1.55).rotation.x = 0.1;       // hood slope
+    add(new THREE.BoxGeometry(2.14, 0.3, 0.5), trim, 0, 0.4, -1.85);                            // front bumper
+    add(new THREE.BoxGeometry(2.14, 0.34, 0.42), trim, 0, 0.44, 1.88);                          // rear bumper
+    add(new THREE.BoxGeometry(2.16, 0.16, 3.3), trim, 0, 0.3, 0);                               // side skirts band
+    add(new THREE.BoxGeometry(1.15, 0.22, 0.9), mat(BLACK, { roughness: 0.9 }), 0, 0.62, -1.93); // grille
+    const cabin = add(new THREE.BoxGeometry(1.72, 0.62, 1.95), glass, 0, 1.18, -0.15);
+    cabin.rotation.x = -0.04;
+    add(new THREE.BoxGeometry(1.78, 0.09, 1.5), paint, 0, 1.52, -0.18);                         // roof panel
+    add(new THREE.BoxGeometry(1.7, 0.09, 0.28), trim, 0, 1.28, 1.98);                           // spoiler blade
+    for (const s of [-1, 1]) {
+      add(new THREE.BoxGeometry(0.1, 0.09, 0.34), trim, s * 0.83, 1.24, 1.9);                    // spoiler struts
+      add(new THREE.BoxGeometry(0.3, 0.12, 0.2), trim, s * 1.12, 1.12, -0.72);                  // mirrors
+      const lamp = add(new THREE.BoxGeometry(0.46, 0.2, 0.08),
+        mat(0xffe9a8, { emissive: 0xffc84d, emissiveIntensity: 1.6 }), s * 0.66, 0.72, -2.0);
+      lamp.castShadow = false;
+      // headlight glow sprite
+      const glow = new THREE.Sprite(new THREE.SpriteMaterial({
+        color: 0xffd9a0, transparent: true, opacity: 0.55, depthWrite: false, blending: THREE.AdditiveBlending,
+      }));
+      glow.scale.setScalar(1.5); glow.position.set(s * 0.66, 0.72, -2.1); g.add(glow);
+      // real spotlight
+      const spot = new THREE.SpotLight(0xffe2b0, 90, 42, 0.52, 0.65, 1.1);
+      spot.position.set(s * 0.66, 0.78, -1.9);
+      spot.target.position.set(s * 0.9, 0.1, -11);
+      g.add(spot); g.add(spot.target);
+      this.headlightSpots = this.headlightSpots || []; this.headlightSpots.push(spot);
+    }
+    // brake lights (shared material so HUD of intensity is one write)
+    this.brakeMat = mat(0x881111, { emissive: 0xff2211, emissiveIntensity: 0.8 });
+    for (const s of [-1, 1]) add(new THREE.BoxGeometry(0.5, 0.18, 0.08), this.brakeMat, s * 0.64, 0.74, 2.0).castShadow = false;
+
+    // wheels: steer pivot -> spin group (tire + hub + spokes)
+    this.spinWheels = []; this.frontWheels = [];
+    const tireGeo = new THREE.TorusGeometry(0.3, 0.13, 10, 20);
+    const hubGeo = new THREE.CylinderGeometry(0.17, 0.17, 0.36, 10); hubGeo.rotateZ(Math.PI / 2);
+    const spokeGeo = new THREE.BoxGeometry(0.38, 0.07, 0.46);
+    for (const [x, z, front] of [[-1.04, -1.32, true], [1.04, -1.32, true], [-1.04, 1.32, false], [1.04, 1.32, false]]) {
+      const pivot = new THREE.Group(); pivot.position.set(x, 0.43, z); g.add(pivot);
+      const spin = new THREE.Group(); pivot.add(spin);
+      const tire = new THREE.Mesh(tireGeo, mat(0x141414, { roughness: 0.95 }));
+      tire.rotation.y = Math.PI / 2; tire.castShadow = true; spin.add(tire);
+      spin.add(new THREE.Mesh(hubGeo, mat(0xb9b9b9, { metalness: 0.7, roughness: 0.35 })));
+      for (let k = 0; k < 3; k++) {
+        const sp = new THREE.Mesh(spokeGeo, mat(0x8f8f8f, { metalness: 0.6, roughness: 0.4 }));
+        sp.rotation.x = (k / 3) * Math.PI; spin.add(sp);
+      }
+      this.spinWheels.push(spin);
+      if (front) this.frontWheels.push(pivot);
+    }
+  }
 }
