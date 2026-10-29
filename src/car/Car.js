@@ -243,13 +243,22 @@ export class Car {
     wrap.scale.setScalar(3.9 / size.z);
     wrap.rotation.y = Math.PI;
     // The GLB ships its paint materials black/grey — the showroom recolors
-    // them at runtime. Do the same: Rosso Corsa #FF2800 (their own palette)
-    // on the body shell ('material') and skin panels ('F40_Skin').
+    // them at runtime. Do the same, properly: a clearcoat physical paint
+    // (Rosso Corsa #FF2800, their own palette) on the body shell ('material')
+    // and skin panels ('F40_Skin'), lit by the scene environment — flat
+    // tinting alone is what made it read as cartoon.
+    const paintMat = new THREE.MeshPhysicalMaterial({
+      // Base deepened past Rosso Corsa #FF2800: the bright sky IBL adds
+      // white-blue diffuse light that washes a pure #FF2800 to pink, so the
+      // albedo compensates — rendered result lands on Rosso Corsa.
+      color: 0xd21f02, metalness: 0.04, roughness: 0.32,
+      clearcoat: 1, clearcoatRoughness: 0.05, envMapIntensity: 0.5,
+    });
     wrap.traverse((o) => {
       if (!o.isMesh) return;
       o.castShadow = true;
-      const ms = Array.isArray(o.material) ? o.material : [o.material];
-      for (const m of ms) if (m && (m.name === 'F40_Skin' || m.name === 'material')) m.color.set(0xff2800);
+      const swap = (m) => (m && (m.name === 'F40_Skin' || m.name === 'material')) ? paintMat : m;
+      o.material = Array.isArray(o.material) ? o.material.map(swap) : swap(o.material);
     });
 
     // Replace the procedural shell.

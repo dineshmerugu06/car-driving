@@ -4,7 +4,8 @@
 // world still renders and the car drives in lite kinematic mode — never a
 // silent black screen (window.__showError surfaces any failure on-page).
 import * as THREE from 'three';
-import { buildWorld, ZONES } from './world/World.js';
+import { Sky } from 'three/addons/objects/Sky.js';
+import { buildWorld, ZONES, SUN_DIR } from './world/World.js';
 import { Car, input } from './car/Car.js';
 import { createHud } from './ui/Hud.js';
 import { PhysicsWorld } from './physics/PhysicsWorld.js';
@@ -17,7 +18,7 @@ const smokeEl = document.getElementById('smoke');
 
 async function boot() {
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(58, innerWidth / innerHeight, 0.1, 900);
+  const camera = new THREE.PerspectiveCamera(58, innerWidth / innerHeight, 0.1, 6000);
   camera.position.set(0, 9, 108);
 
   const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -27,8 +28,25 @@ async function boot() {
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.06;
+  renderer.toneMappingExposure = 0.85;
   container.appendChild(renderer.domElement);
+
+  // Image-based lighting generated from the SAME sky the player sees (the
+  // folio/showroom technique: environment from a real sky, not a studio) —
+  // sky-blue reflections on car paint/glass, warm ground bounce, one
+  // consistent light story across every PBR material.
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const envScene = new THREE.Scene();
+  const envSky = new Sky();
+  envSky.scale.setScalar(100);
+  envSky.material.uniforms.turbidity.value = 6;
+  envSky.material.uniforms.rayleigh.value = 2.2;
+  envSky.material.uniforms.mieCoefficient.value = 0.004;
+  envSky.material.uniforms.mieDirectionalG.value = 0.85;
+  envSky.material.uniforms.sunPosition.value.copy(SUN_DIR);
+  envScene.add(envSky);
+  scene.environment = pmrem.fromScene(envScene, 0.04).texture;
+  scene.environmentIntensity = 0.45;
 
   let physics = null;
   try {
