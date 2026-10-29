@@ -6,6 +6,7 @@
 // the game must never be a black screen.
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { ORANGE, BLACK, WORLD_SIZE } from '../world/World.js';
 
 const mat = (color, opts = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.6, metalness: 0.1, ...opts });
@@ -30,6 +31,9 @@ export class Car {
     this.group.add(this.bodyG);
     this.buildMesh();
     scene.add(this.group);
+    this.modelLoaded = false;
+    this._wheelRadius = 0.42;
+    this.loadModel();
 
     this.heading = 0; this.speed = 0; this.steer = 0;
     this.pos = new THREE.Vector3(SPAWN.x, 0, SPAWN.z);
@@ -200,7 +204,7 @@ export class Car {
 
     // wheels: steer visual + spin
     for (const p of this.frontWheels) p.rotation.y = this.steer;
-    this._spin = (this._spin || 0) + (this.speed * dt) / 0.42;
+    this._spin = (this._spin || 0) + (this.speed * dt) / this._wheelRadius;
     for (const w of this.spinWheels) w.rotation.x = this._spin;
 
     // brake lights
@@ -213,6 +217,91 @@ export class Car {
 
   get kmh() { return Math.round(Math.abs(this.speed) * 3.6); }
   get speedRatio() { return Math.abs(this.speed) / MAX_FWD; }
+
+  // ---------------- real model (Ferrari F40 GLB) ----------------
+  // Visual swap only: Rapier body, collider and arcade control are unchanged.
+  // The procedural car stays as the instant spawn + fallback if the GLB
+  // fails to load — never a missing car.
+  loadModel() {
+    const url = new URL('assets/models/ferrari.glb', document.baseURI).href;
+    new GLTFLoader().load(url,
+      (gltf) => { try { this.applyModel(gltf.scene); } catch (e) { console.warn('Model apply failed — keeping procedural car', e); } },
+      undefined,
+      (err) => console.warn('Ferrari model failed to load — keeping procedural car', err));
+  }
+
+  applyModel(model) {
+    // Normalize: model front is +Z and length is Z (4.53) — rotate so the
+    // nose faces -Z like the procedural car, scale length to the 3.9 the
+    // collider was tuned for, rest the wheels on y=0, centre x/z.
+    const wrap = new THREE.Group();
+    const box = new THREE.Box3().setFromObject(model);
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+    model.position.set(-center.x, -box.min.y, -center.z);
+    wrap.add(model);
+    wrap.scale.setScalar(3.9 / size.z);
+    wrap.rotation.y = Math.PI;
+    // The GLB ships its paint materials black/grey — the showroom recolors
+    // them at runtime. Do the same: Rosso Corsa #FF2800 (their own palette)
+    // on the body shell ('material') and skin panels ('F40_Skin').
+    wrap.traverse((o) => {
+      if (!o.isMesh) return;
+      o.castShadow = true;
+      const ms = Array.isArray(o.material) ? o.material : [o.material];
+      for (const m of ms) if (m && (m.name === 'F40_Skin' || m.name === 'material')) m.color.set(0xff2800);
+    });
+
+    // Replace the procedural shell.
+    this.bodyG.clear();
+    this.bodyG.add(wrap);
+    this.frontWheels = []; this.spinWheels = [];
+    this.brakeMat = mat(0x881111, { emissive: 0xff2211, emissiveIntensity: 0.8 }); // dummy: F40 rear lights are baked into the model
+    this._wheelRadius = 0.29;
+
+    // Extract the wheel meshes (and their brake discs) into steer/spin
+    // pivots in body space, so the game feel (steering + rolling) survives.
+    this.bodyG.updateWorldMatrix(true, true);
+    const toBody = new THREE.Matrix4().copy(this.bodyG.matrixWorld).invert();
+    const parts = [];
+    wrap.traverse((o) => {
+      if (!o.isMesh) return;
+      const geo = o.geometry.clone().applyMatrix4(new THREE.Matrix4().multiplyMatrices(toBody, o.matrixWorld));
+      geo.computeBoundingBox();
+      const bb = geo.boundingBox;
+      const c = bb.getCenter(new THREE.Vector3());
+      const s = bb.getSize(new THREE.Vector3());
+      parts.push({ mesh: o, geo, c, s });
+    });
+    const isWheel = (p) => p.s.y > 0.5 && p.s.y < 0.82 && p.s.x > 0.18 && p.s.x < 0.46 && p.s.z > 0.5 && p.s.z < 0.82
+      && Math.abs(p.c.x) > 0.55 && Math.abs(p.c.x) < 1.0 && p.c.y > 0.18 && p.c.y < 0.52 && Math.abs(p.c.z) > 0.85 && Math.abs(p.c.z) < 1.35;
+    const wheels = parts.filter(isWheel);
+    for (const w of wheels) {
+      const pivot = new THREE.Group(); pivot.position.copy(w.c); this.bodyG.add(pivot);
+      const spin = new THREE.Group(); pivot.add(spin);
+      const take = (p) => {
+        p.geo.translate(-w.c.x, -w.c.y, -w.c.z);
+        const m = new THREE.Mesh(p.geo, p.mesh.material); m.castShadow = true; spin.add(m);
+        if (p.mesh.parent) p.mesh.parent.remove(p.mesh);
+      };
+      take(w);
+      // brake discs etc. sitting at the same centre ride along
+      for (const p of parts) if (p !== w && p.mesh.parent && p.c.distanceTo(w.c) < 0.09) take(p);
+      this.spinWheels.push(spin);
+      if (w.c.z < 0) this.frontWheels.push(pivot); // body-space front is -Z
+    }
+
+    // Keep real headlights (quality toggle in main.js uses headlightSpots).
+    this.headlightSpots = [];
+    for (const s of [-1, 1]) {
+      const spot = new THREE.SpotLight(0xffe2b0, 90, 42, 0.52, 0.65, 1.1);
+      spot.position.set(s * 0.62, 0.62, -1.85);
+      spot.target.position.set(s * 0.85, 0.05, -11);
+      this.bodyG.add(spot); this.bodyG.add(spot.target);
+      this.headlightSpots.push(spot);
+    }
+    this.modelLoaded = true;
+  }
 
   // ---------------- mesh ----------------
   buildMesh() {

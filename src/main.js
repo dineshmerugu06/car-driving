@@ -107,7 +107,7 @@ async function boot() {
           t: +smokeT.toFixed(1), started: hud.started, physics: !!physics,
           x: +car.pos.x.toFixed(1), z: +car.pos.z.toFixed(1), y: +car.y.toFixed(2),
           speed: +car.speed.toFixed(1), kmh: car.kmh, grounded: car.grounded,
-          zones: ZONES.length, stars: starCount,
+          zones: ZONES.length, stars: starCount, model: car.modelLoaded,
           drawCalls: renderer.info.render.calls,
           errors: window.__errors ? window.__errors.length : -1,
         });

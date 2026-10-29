@@ -1,8 +1,12 @@
 # zero_project1 — MERUGU: Driveable 3D World Portfolio
 
 A full interactive 3D world you **drive through** — not a normal website.
-Steer Merugu's orange car around a low-poly plaza and discover his portfolio
+Steer Merugu's Ferrari F40 (the real GLB model from the Otherlife virtual
+car showroom, Rosso Corsa #FF2800, mirrored in the `cars` repo) around a
+low-poly plaza and discover his portfolio
 zone by zone: START, ABOUT, PROJECT ZERO, PROJECTS, SKILLS, PROCESS, CONTACT.
+The procedural orange car remains as the instant spawn + fallback if the
+model fails to load.
 
 Built by Merugu (vibe coder & AI builder, India) with the workflow:
 Setup → Explore → Plan → Code → Verify → Commit. See `PLAN.md`.
@@ -99,9 +103,10 @@ public/assets/        reserved folders (models/textures/sounds/images) —
 - **Real physics (Rapier):** car is a dynamic rigid body; cones & crates are
   dynamic bodies you knock over; two wedge ramps have rotated colliders you
   can drive up and jump off; collision events drive thuds + speed loss.
-- **Car detail:** clearcoat orange paint, glass cabin, hood/bumpers/spoiler/
-  mirrors, spoked wheels, real spotlight headlights with glow, brake lights
-  that flare on braking, suspension squash + body roll/pitch.
+- **Car detail:** Ferrari F40 GLB (48 meshes) with its wheels extracted into
+  steer/spin pivots, real spotlight headlights, suspension squash + body
+  roll/pitch. The fallback procedural car keeps clearcoat orange paint, glass
+  cabin, spoked wheels and brake lights that flare on braking.
 - **World density:** canvas textures (asphalt, plaza tiles, lit-window
   facades, speckled ground), ~56 instanced trees, instanced rocks, more
   varied buildings, lamp glow sprites, drifting clouds, perimeter hills.
