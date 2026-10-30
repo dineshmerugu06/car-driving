@@ -1,11 +1,14 @@
 // World.js — scene, lights, ground/roads (canvas textures), props, zones,
 // signs, stars, and ALL physics registration (via PhysicsWorld).
 // Everything is original geometry + canvas textures. No external assets.
-// V4 HIGH-QUALITY OPEN WORLD: physical sky + environment lighting, hi-res
-// procedural PBR textures, natural trees/hills/horizon — same layout, same
-// colliders, same gameplay as V2/V3; only the look changed.
+// V6 NINJA-STANDARD WORLD: the 3d-ninja/samsy recipe transferred to WebGL —
+// a dark, emissive-led city: authored glow only (bloom in main.js), a wet
+// reflected plaza, range fog swallowing the edges, warm lamp pools, lit
+// windows and a film grade. Same layout, same colliders, same gameplay as
+// V2/V3/V5; only the look changed.
 import * as THREE from 'three';
 import { Sky } from 'three/addons/objects/Sky.js';
+import { Reflector } from 'three/addons/objects/Reflector.js';
 
 export const ORANGE = 0xff5a00;
 export const BLACK = 0x121212;
@@ -13,7 +16,7 @@ export const WORLD_SIZE = 240; // playable square, clamped at ±WORLD_SIZE/2
 // One sun direction shared by the Sky, the directional light AND the PMREM
 // environment main.js generates from a matching Sky — reflections, ambient
 // and shadows all agree, which is what makes materials read as realistic.
-export const SUN_DIR = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.degToRad(90 - 30), THREE.MathUtils.degToRad(135));
+export const SUN_DIR = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.degToRad(90 - 4), THREE.MathUtils.degToRad(132));
 
 const mat = (color, opts = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.9, metalness: 0.02, ...opts });
 
@@ -151,6 +154,8 @@ export const TEX = {
     const S = 1024, cols = 7, rows = 12, cw = S / cols, rh = S / rows;
     const colorC = heightCanvas(S, () => {}); const g = colorC.getContext('2d');
     const heightC = heightCanvas(S, () => {}); const hg = heightC.getContext('2d');
+    const emissiveC = heightCanvas(S, () => {}); const eg = emissiveC.getContext('2d');
+    eg.fillStyle = '#000'; eg.fillRect(0, 0, S, S);
     noiseFill(g, S, tint, 0.07);
     hg.fillStyle = '#7a7a7a'; hg.fillRect(0, 0, S, S);
     for (let y = 0; y < rows; y++) {
@@ -158,8 +163,15 @@ export const TEX = {
       hg.fillStyle = '#a8a8a8'; hg.fillRect(0, y * rh + rh - 6, S, 6); // slab edge raised
       for (let x = 0; x < cols; x++) {
         const px = x * cw + 9, py = y * rh + 8, pw = cw - 18, ph = rh - 20;
-        const lit = hash(x * 13, y * 29) > 0.82;
-        if (lit) { g.fillStyle = hash(x, y) > 0.5 ? '#ffd489' : '#ffb765'; g.fillRect(px, py, pw, ph); }
+        const lit = hash(x * 13, y * 29) > 0.76;
+        if (lit) {
+          const warm = hash(x * 7, y * 11) > 0.18;
+          g.fillStyle = warm ? (hash(x, y) > 0.5 ? '#ffd489' : '#ffb765') : '#c7ecff';
+          g.fillRect(px, py, pw, ph);
+          // Only these windows are authored into the emissive channel, so
+          // only these can bloom — the samsy MRT lesson, adapted to WebGL.
+          eg.fillStyle = warm ? '#ff9e45' : '#8fd8ff'; eg.fillRect(px, py, pw, ph);
+        }
         else {
           const gr = g.createLinearGradient(px, py, px + pw, py + ph);
           gr.addColorStop(0, glass[0]); gr.addColorStop(0.45, glass[1]); gr.addColorStop(0.62, '#c7d6e2'); gr.addColorStop(1, glass[1]);
@@ -174,7 +186,9 @@ export const TEX = {
     }
     const map = new THREE.CanvasTexture(colorC);
     map.wrapS = map.wrapT = THREE.RepeatWrapping; map.anisotropy = 8; map.colorSpace = THREE.SRGBColorSpace;
-    return { map, normalMap: normalTexture(heightC, 1, 2.4) };
+    const emissiveMap = new THREE.CanvasTexture(emissiveC);
+    emissiveMap.wrapS = emissiveMap.wrapT = THREE.RepeatWrapping; emissiveMap.anisotropy = 8; emissiveMap.colorSpace = THREE.SRGBColorSpace;
+    return { map, normalMap: normalTexture(heightC, 1, 2.4), emissiveMap };
   },
   // crate wood: planks + grain streaks
   wood: () => canvasTex(512, (g, s) => {
@@ -195,7 +209,9 @@ function signTexture(title, lines = [], { bg = '#121212', fg = '#e9e9e6', accent
   const c = document.createElement('canvas'); c.width = 1024; c.height = 512;
   const g = c.getContext('2d');
   g.fillStyle = bg; g.fillRect(0, 0, 1024, 512);
+  g.shadowColor = accent; g.shadowBlur = 22;
   g.fillStyle = accent; g.fillRect(0, 0, 1024, 26); g.fillRect(0, 486, 1024, 26);
+  g.shadowBlur = 16;
   g.fillStyle = fg; g.textAlign = 'center';
   g.font = '900 118px system-ui, sans-serif';
   const words = title.split(' ');
@@ -213,7 +229,9 @@ function signTexture(title, lines = [], { bg = '#121212', fg = '#e9e9e6', accent
 export function makeSign(title, lines, w = 14) {
   const grp = new THREE.Group();
   const tex = signTexture(title, lines);
-  const faceM = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.85 });
+  const faceM = new THREE.MeshStandardMaterial({
+    map: tex, emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 1.2, roughness: 0.55,
+  });
   const board = new THREE.Mesh(new THREE.BoxGeometry(w, w / 2, 0.4),
     [mat(BLACK), mat(BLACK), mat(BLACK), mat(BLACK), faceM, mat(BLACK)]);
   board.position.y = w / 4 + 3.4; board.castShadow = true; grp.add(board);
@@ -244,7 +262,8 @@ function makeRamp(w, run, h) {
   const wedge = new THREE.Mesh(geo, mat(0x3a3a3a, { roughness: 0.95 }));
   wedge.rotation.y = -Math.PI / 2; // shape +X (low toe) -> world +Z, high edge -> -Z: slope rises north
   wedge.castShadow = true; wedge.receiveShadow = true; grp.add(wedge);
-  const lip = new THREE.Mesh(new THREE.BoxGeometry(w + 0.4, 0.28, 0.8), mat(ORANGE));
+  const lip = new THREE.Mesh(new THREE.BoxGeometry(w + 0.4, 0.28, 0.8),
+    new THREE.MeshStandardMaterial({ color: ORANGE, emissive: ORANGE, emissiveIntensity: 1.5, roughness: 0.5 }));
   lip.position.set(0, h + 0.05, -run / 2 + 0.4); lip.castShadow = true; grp.add(lip);
   return { grp, slopeAngle: Math.atan2(h, run) };
 }
@@ -260,7 +279,7 @@ function starMesh() {
   const geo = new THREE.ExtrudeGeometry(s, { depth: 0.32, bevelEnabled: false });
   geo.center();
   return new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
-    color: ORANGE, emissive: 0xff5a00, emissiveIntensity: 0.55, roughness: 0.35, metalness: 0.3,
+    color: ORANGE, emissive: 0xff5a00, emissiveIntensity: 1.6, roughness: 0.35, metalness: 0.3,
   }));
 }
 
@@ -282,19 +301,23 @@ export function buildWorld(scene, physics) {
   const regBox = (x, y, z, hx, hy, hz, ry = 0) => { if (phys) phys.addFixedBox({ x, y, z, hx, hy, hz, ry }); };
   const regCyl = (x, z, r, h) => { if (phys) phys.addFixedCylinder({ x, z, r, h }); };
 
-  // --- physical sky (atmospheric scattering), fog, lights ---
+  // --- dusk sky, black range fog, moonlight ---
+  // Samsy's atmosphere is not a bright sky: it is darkness with authored
+  // emissive landmarks. The Sky stays only as a deep afterglow on the
+  // horizon; fog does the world-edge work and lamps/signs do the lighting.
+  scene.background = new THREE.Color(0x020409);
   const sky = new Sky();
   sky.scale.setScalar(6000);
   const skyU = sky.material.uniforms;
-  skyU.turbidity.value = 6; skyU.rayleigh.value = 2.2;
-  skyU.mieCoefficient.value = 0.004; skyU.mieDirectionalG.value = 0.85;
+  skyU.turbidity.value = 8; skyU.rayleigh.value = 2.8;
+  skyU.mieCoefficient.value = 0.006; skyU.mieDirectionalG.value = 0.85;
   const sunPos = SUN_DIR;
   skyU.sunPosition.value.copy(sunPos);
   scene.add(sky);
-  scene.fog = new THREE.Fog(0xc7d5df, 170, 1150);
-  scene.add(new THREE.HemisphereLight(0xdcebf5, 0x5c6b4a, 0.5));
-  const sun = new THREE.DirectionalLight(0xfff1da, 2.8);
-  sun.position.copy(sunPos).multiplyScalar(190); sun.castShadow = true;
+  scene.fog = new THREE.Fog(0x030509, 55, 235);
+  scene.add(new THREE.HemisphereLight(0x243447, 0x05070a, 0.55));
+  const sun = new THREE.DirectionalLight(0x8fb6d9, 0.95); // moonlight
+  sun.position.set(-70, 120, -90); sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
   Object.assign(sun.shadow.camera, { left: -150, right: 150, top: 150, bottom: -150, far: 480 });
   sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.03;
@@ -305,17 +328,58 @@ export function buildWorld(scene, physics) {
 
   // --- ground + plaza ---
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(1700, 1700),
-    new THREE.MeshStandardMaterial({ map: TEX.ground(), normalMap: TEX.groundNormal(), roughness: 1 }));
+    new THREE.MeshStandardMaterial({ map: TEX.ground(), normalMap: TEX.groundNormal(), color: 0x2a3d26, roughness: 0.92, envMapIntensity: 0.16 }));
   ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; world.add(ground);
   const plazaPair = TEX.plazaPair();
   const pad = new THREE.Mesh(new THREE.PlaneGeometry(46, 46),
-    new THREE.MeshStandardMaterial({ map: plazaPair.map, normalMap: plazaPair.normalMap, roughness: 0.95 }));
+    new THREE.MeshStandardMaterial({ map: plazaPair.map, normalMap: plazaPair.normalMap, color: 0x59616a, roughness: 0.65, envMapIntensity: 0.35 }));
   pad.rotation.x = -Math.PI / 2; pad.position.set(0, 0.02, 78); pad.receiveShadow = true; world.add(pad);
+  // Wet reflected plaza — samsy's signature floor, in WebGL form: a planar
+  // Reflector whose image is broken up by the plaza texture itself (fine
+  // ripple) and masked by its grout/slabs so it reads as rain-slick stone,
+  // not a mirror. 0.75-res target, exactly his resolution factor.
+  const wetShader = {
+    name: 'NinjaWetPlaza',
+    uniforms: {
+      color: { value: null }, tDiffuse: { value: null }, textureMatrix: { value: null }, tMask: { value: null },
+    },
+    vertexShader: Reflector.ReflectorShader.vertexShader,
+    fragmentShader: `
+      uniform vec3 color;
+      uniform sampler2D tDiffuse;
+      uniform sampler2D tMask;
+      varying vec4 vUv;
+      void main() {
+        vec2 planeUv = vUv.xy / max(vUv.w, 0.0001);
+        vec4 maskTex = texture2D(tMask, planeUv * 7.0);
+        vec4 projected = vUv;
+        projected.xy += (maskTex.rg - 0.5) * 0.018 * vUv.w;
+        vec3 reflection = texture2DProj(tDiffuse, projected).rgb;
+        float mask = 0.05 + maskTex.g * 0.40;
+        vec3 base = vec3(0.004, 0.005, 0.008);
+        gl_FragColor = vec4(mix(base, reflection * color, mask), 1.0);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+      }`,
+  };
+  const reflector = new Reflector(new THREE.PlaneGeometry(46, 46), {
+    clipBias: 0.003,
+    textureWidth: 1024,
+    textureHeight: 1024,
+    color: 0x66798c,
+    shader: wetShader,
+    multisample: 0,
+  });
+  reflector.material.uniforms.tMask.value = plazaPair.map;
+  reflector.rotation.x = -Math.PI / 2; reflector.position.set(0, 0.055, 78); world.add(reflector);
 
-  // --- roads: concrete curb bed under textured asphalt ---
+  // --- roads: dark wet asphalt under a concrete curb bed ---
   const asphalt = TEX.asphalt();
-  const roadMat = new THREE.MeshStandardMaterial({ map: asphalt, normalMap: TEX.asphaltNormal(), roughness: 0.96 });
-  const curbMat = new THREE.MeshStandardMaterial({ color: 0x9d988c, roughness: 0.95 });
+  const roadMat = new THREE.MeshPhysicalMaterial({
+    map: asphalt, normalMap: TEX.asphaltNormal(), color: 0x777d84,
+    roughness: 0.38, clearcoat: 0.55, clearcoatRoughness: 0.32, envMapIntensity: 0.9,
+  });
+  const curbMat = new THREE.MeshStandardMaterial({ color: 0x23282d, roughness: 0.95 });
   let roadN = 0;
   const road = (w, d, x, z) => {
     const lift = roadN++ * 0.0016; // mm-steps so overlapping planes never z-fight at crossings
@@ -330,14 +394,14 @@ export function buildWorld(scene, physics) {
   road(10, 100, -52, -52); road(10, 100, 52, -52);
   road(120, 10, 0, -58);
   // --- sidewalks (raised) + white edge lines on the two main roads ---
-  const walkMat = new THREE.MeshStandardMaterial({ color: 0xa8a294, normalMap: microNormal(512, 40, 1.1), roughness: 0.95 });
+  const walkMat = new THREE.MeshStandardMaterial({ color: 0x394047, normalMap: microNormal(512, 40, 1.1), roughness: 0.8, envMapIntensity: 0.25 });
   const walk = (w, d, x, z) => {
     const m = new THREE.Mesh(new THREE.BoxGeometry(w, 0.14, d), walkMat);
     m.position.set(x, 0.07, z); m.receiveShadow = true; m.castShadow = false; world.add(m);
   };
   walk(1.8, WORLD_SIZE, -8.1, 0); walk(1.8, WORLD_SIZE, 8.1, 0);
   for (const sz of [-1, 1]) for (const sx of [-1, 1]) walk(110, 1.8, sx * 64.8, 8 + sz * 8.1);
-  const edgeMat = new THREE.MeshStandardMaterial({ color: 0xe8e6df, roughness: 0.7 });
+  const edgeMat = new THREE.MeshStandardMaterial({ color: 0xaeb9bf, emissive: 0x9fb6c4, emissiveIntensity: 0.22, roughness: 0.55 });
   const edge = (w, d, x, z) => {
     const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d), edgeMat);
     m.rotation.x = -Math.PI / 2; m.position.set(x, 0.048, z); m.receiveShadow = true; world.add(m);
@@ -345,7 +409,7 @@ export function buildWorld(scene, physics) {
   edge(0.22, WORLD_SIZE, -6.55, 0); edge(0.22, WORLD_SIZE, 6.55, 0);
   for (const sz of [-1, 1]) for (const sx of [-1, 1]) edge(110, 0.22, sx * 64.8, 8 + sz * 6.55);
 
-  const dashMat = mat(ORANGE);
+  const dashMat = new THREE.MeshStandardMaterial({ color: ORANGE, emissive: ORANGE, emissiveIntensity: 1.15, roughness: 0.5 });
   for (let i = -10; i <= 10; i++) {
     const d = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 4), dashMat);
     d.rotation.x = -Math.PI / 2; d.position.set(0, 0.05, i * 11); world.add(d);
@@ -355,8 +419,9 @@ export function buildWorld(scene, physics) {
 
   // --- zone rings, signs, stars ---
   for (const z of ZONES) {
-    const ring = new THREE.Mesh(new THREE.RingGeometry(z.r - 1.2, z.r, 48),
-      new THREE.MeshBasicMaterial({ color: ORANGE, side: THREE.DoubleSide, transparent: true, opacity: 0.9 }));
+    const ringMat = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, transparent: true, opacity: 0.95 });
+    ringMat.color.setRGB(1.45, 0.55, 0.06); // HDR orange: authored glow, blooms without blowing out
+    const ring = new THREE.Mesh(new THREE.RingGeometry(z.r - 1.2, z.r, 48), ringMat);
     ring.rotation.x = -Math.PI / 2; ring.position.set(z.x, 0.06, z.z); world.add(ring);
     z.ring = ring;
     const s = makeSign(z.name, z.id === 'contact' ? ['GITHUB.COM/DINESH', 'MERUGU06'] : ['DRIVE IN TO EXPLORE'], z.id === 'skills' ? 17 : 13);
@@ -378,12 +443,12 @@ export function buildWorld(scene, physics) {
 
   // --- buildings: 3 facade variants, reflective glass, rooftop clutter ---
   const facadeMats = [
-    new THREE.MeshStandardMaterial({ ...TEX.facadePair('#878e99', ['#a8c2d6', '#4f657c']), roughness: 0.5, metalness: 0.22, envMapIntensity: 0.85 }),
-    new THREE.MeshStandardMaterial({ ...TEX.facadePair('#6d6a63', ['#b0c8da', '#5d7285']), roughness: 0.62, metalness: 0.14, envMapIntensity: 0.7 }),
-    new THREE.MeshStandardMaterial({ ...TEX.facadePair('#3d4750', ['#8fb0c9', '#39506a']), roughness: 0.38, metalness: 0.3, envMapIntensity: 1.0 }),
+    new THREE.MeshStandardMaterial({ ...TEX.facadePair('#454e59', ['#5f7488', '#1c2836']), emissive: 0xffffff, emissiveIntensity: 1.9, roughness: 0.46, metalness: 0.22, envMapIntensity: 0.65 }),
+    new THREE.MeshStandardMaterial({ ...TEX.facadePair('#3a3f3d', ['#687d8c', '#24313d']), emissive: 0xffffff, emissiveIntensity: 1.75, roughness: 0.58, metalness: 0.14, envMapIntensity: 0.55 }),
+    new THREE.MeshStandardMaterial({ ...TEX.facadePair('#232c35', ['#54748f', '#162638']), emissive: 0xffffff, emissiveIntensity: 2.05, roughness: 0.36, metalness: 0.3, envMapIntensity: 0.8 }),
   ];
-  const topM = mat(0x3a3a3c, { roughness: 0.95 });
-  const bandM = mat(ORANGE);
+  const topM = mat(0x11151a, { roughness: 0.95 });
+  const bandM = new THREE.MeshStandardMaterial({ color: ORANGE, emissive: ORANGE, emissiveIntensity: 1.25, roughness: 0.5 });
   const buildingSpots = [[-105, -85], [-92, -95], [100, 88], [108, -88], [-104, 88], [96, 96], [-40, -104], [44, 104], [110, 0], [-110, -10], [30, -108], [-28, 108], [86, -104], [-86, 104], [112, 44], [-112, -48]];
   buildingSpots.forEach(([x, z], bi) => {
     const seed = Math.abs(Math.sin(x * 12.9898 + z * 78.233) * 43758.5453) % 1;
@@ -395,12 +460,12 @@ export function buildWorld(scene, physics) {
     band.position.set(x, h - 2.2, z); world.add(band);
     // ground-floor storefront: dark reflective glass wrapping the base
     const store = new THREE.Mesh(new THREE.BoxGeometry(w + 0.5, 3.0, d + 0.5),
-      new THREE.MeshStandardMaterial({ color: 0x161d24, roughness: 0.12, metalness: 0.5, envMapIntensity: 1.35 }));
+      new THREE.MeshStandardMaterial({ color: 0x0d141b, emissive: 0x4fb7d9, emissiveIntensity: 0.16, roughness: 0.08, metalness: 0.35, envMapIntensity: 1.6 }));
     store.position.set(x, 1.5, z); store.castShadow = true; store.receiveShadow = true; world.add(store);
     // parapet + rooftop AC units (visual only, inside the same footprint)
     const par = new THREE.Mesh(new THREE.BoxGeometry(w + 0.35, 0.8, d + 0.35), topM);
     par.position.set(x, h + 0.3, z); par.castShadow = true; world.add(par);
-    const ac = new THREE.Mesh(new THREE.BoxGeometry(2.4, 1.1, 1.8), mat(0x8f9296, { roughness: 0.7, metalness: 0.35 }));
+    const ac = new THREE.Mesh(new THREE.BoxGeometry(2.4, 1.1, 1.8), mat(0x394048, { roughness: 0.7, metalness: 0.35 }));
     ac.position.set(x + (seed - 0.5) * w * 0.4, h + 0.55, z + (0.5 - seed) * d * 0.35); ac.castShadow = true; world.add(ac);
     regBox(x, h / 2, z, w / 2, h / 2, d / 2);
   });
@@ -421,12 +486,12 @@ export function buildWorld(scene, physics) {
   }, 2);
   const trunkIM = new THREE.InstancedMesh(
     new THREE.CylinderGeometry(0.24, 0.52, 4.4, 8),
-    new THREE.MeshStandardMaterial({ map: barkTex, roughness: 1 }), treeSpots.length);
+    new THREE.MeshStandardMaterial({ map: barkTex, color: 0x4a3a2c, roughness: 1 }), treeSpots.length);
   const canopyGeo = new THREE.SphereGeometry(2.35, 16, 12);
   { // continuous-noise displacement + leaf colour per vertex
     const pos = canopyGeo.attributes.position, v = new THREE.Vector3();
     const colors = new Float32Array(pos.count * 3);
-    const dark = new THREE.Color(0x1e4220), light = new THREE.Color(0x527a38), c = new THREE.Color();
+    const dark = new THREE.Color(0x0d2413), light = new THREE.Color(0x2c4d27), c = new THREE.Color();
     for (let i = 0; i < pos.count; i++) {
       v.fromBufferAttribute(pos, i);
       const n = Math.sin(v.x * 1.6 + 1.3) * Math.cos(v.y * 2.1 + 0.4) * 0.5
@@ -440,7 +505,7 @@ export function buildWorld(scene, physics) {
     canopyGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     canopyGeo.computeVertexNormals();
   }
-  const canopyMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0 });
+  const canopyMat = new THREE.MeshStandardMaterial({ vertexColors: true, color: 0x8a9a84, roughness: 1, metalness: 0 });
   const crownIM = new THREE.InstancedMesh(canopyGeo, canopyMat, treeSpots.length * 4);
   trunkIM.castShadow = crownIM.castShadow = true; crownIM.receiveShadow = true;
   { const m4 = new THREE.Matrix4(), e = new THREE.Euler(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), p = new THREE.Vector3(), col = new THREE.Color();
@@ -457,7 +522,7 @@ export function buildWorld(scene, physics) {
         e.set(hash(i, k) * 0.6, hash(i * 3, k) * Math.PI * 2, hash(k, i) * 0.6); q.setFromEuler(e);
         sc.set(bs, bs * 0.9, bs);
         p.set(x + ox * s, oy, z + oz * s); m4.compose(p, q, sc); crownIM.setMatrixAt(ci, m4);
-        col.setHSL(0.26 + hash(ci, 4) * 0.05, 0.3, 0.4 + hash(k, i * 13) * 0.12);
+        col.setHSL(0.27 + hash(ci, 4) * 0.04, 0.28, 0.26 + hash(k, i * 13) * 0.1);
         crownIM.setColorAt(ci, col);
         ci++;
       }
@@ -479,13 +544,13 @@ export function buildWorld(scene, physics) {
       e.set(0, hash(i, 1) * Math.PI * 2, 0); q.setFromEuler(e);
       sc.set(s, s * 0.72, s);
       p.set(x, 0.55 * s + 0.3, z); m4.compose(p, q, sc); bushIM.setMatrixAt(i, m4);
-      col.setHSL(0.27 + hash(i, 9) * 0.04, 0.28, 0.38 + hash(2, i) * 0.12);
+      col.setHSL(0.27 + hash(i, 9) * 0.04, 0.26, 0.24 + hash(2, i) * 0.1);
       bushIM.setColorAt(i, col);
     } }
   world.add(bushIM);
 
   // --- rocks: instanced ---
-  const rockIM = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(1, 0), mat(0x8d8d84, { roughness: 1, flatShading: true }), 36);
+  const rockIM = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(1, 0), mat(0x232a30, { roughness: 1, flatShading: true }), 36);
   rockIM.castShadow = true;
   { const m4 = new THREE.Matrix4(), e = new THREE.Euler(), q = new THREE.Quaternion(), p = new THREE.Vector3(), sc = new THREE.Vector3();
     for (let i = 0; i < 36; i++) {
@@ -507,23 +572,38 @@ export function buildWorld(scene, physics) {
     g.fillStyle = grad; g.fillRect(0, 0, 128, 128);
     return new THREE.CanvasTexture(c);
   })();
-  const lampHeadM = mat(0xffe2a0, { emissive: 0xffb84d, emissiveIntensity: 1.6 });
-  const poleM = mat(BLACK);
-  for (let i = -5; i <= 5; i++) for (const sx of [-1, 1]) {
-    const x = sx * 8.5, z = i * 22;
-    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 5.4, 6), poleM);
-    pole.position.set(x, 2.7, z); pole.castShadow = true; world.add(pole);
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.42, 10, 8), lampHeadM);
-    head.position.set(x, 5.5, z); world.add(head);
-    const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
-    glow.scale.setScalar(3.4); glow.position.set(x, 5.5, z); world.add(glow);
-    regCyl(x, z, 0.3, 5.4);
+  const lampHeadM = mat(0xffe2a0, { emissive: 0xffb84d, emissiveIntensity: 3.4 });
+  const poleM = mat(0x05070a);
+  const lampPoolIM = new THREE.InstancedMesh(
+    new THREE.PlaneGeometry(8.5, 8.5),
+    new THREE.MeshBasicMaterial({ map: glowTex, color: 0xff9d45, transparent: true, opacity: 0.35, depthWrite: false, blending: THREE.AdditiveBlending }),
+    22);
+  lampPoolIM.renderOrder = 3;
+  { const m4 = new THREE.Matrix4(), e = new THREE.Euler(-Math.PI / 2, 0, 0), q = new THREE.Quaternion().setFromEuler(e), one = new THREE.Vector3(1, 1, 1);
+    let li = 0;
+    for (let i = -5; i <= 5; i++) for (const sx of [-1, 1]) {
+      const x = sx * 8.5, z = i * 22;
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 5.4, 6), poleM);
+      pole.position.set(x, 2.7, z); pole.castShadow = true; world.add(pole);
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.42, 10, 8), lampHeadM);
+      head.position.set(x, 5.5, z); world.add(head);
+      const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, transparent: true, opacity: 0.9, depthWrite: false, blending: THREE.AdditiveBlending }));
+      glow.scale.setScalar(4.4); glow.position.set(x, 5.5, z); world.add(glow);
+      m4.compose(new THREE.Vector3(x, 0.075, z), q, one); lampPoolIM.setMatrixAt(li++, m4);
+      regCyl(x, z, 0.3, 5.4);
+    } }
+  world.add(lampPoolIM);
+  // A few real point lights sell the pools on the car and nearby geometry;
+  // the rest of the street lighting is emissive + bloom, like the reference.
+  for (const [x, z] of [[-8.5, -44], [8.5, -22], [-8.5, 0], [8.5, 22], [-8.5, 44], [8.5, 66], [-8.5, 88]]) {
+    const pl = new THREE.PointLight(0xffb469, 55, 31, 2);
+    pl.position.set(x, 5.3, z); world.add(pl);
   }
 
   // --- dynamic cones (knockable!) ---
   const coneGeo = new THREE.ConeGeometry(0.55, 1.3, 10);
-  const coneM = mat(ORANGE, { roughness: 0.7 });
-  const coneBandM = mat(0xf2f0ea, { roughness: 0.55 });
+  const coneM = mat(ORANGE, { emissive: ORANGE, emissiveIntensity: 0.32, roughness: 0.7 });
+  const coneBandM = mat(0xd8d8d2, { roughness: 0.55 });
   const coneAt = (x, z) => {
     // group origin = cone centre, so the physics sync moves cone + band together
     const grp = new THREE.Group(); grp.position.set(x, 0.65, z);
@@ -536,7 +616,7 @@ export function buildWorld(scene, physics) {
   [[-6, 62], [6, 62], [-6, 70], [6, 70], [-34, 8], [34, 8], [-3, 30], [3, 30], [-20, -58], [20, -58]].forEach(([x, z]) => coneAt(x, z));
 
   // --- dynamic crates: a knock-down stack near START + singles ---
-  const crateM = new THREE.MeshStandardMaterial({ map: TEX.wood(), roughness: 0.85 });
+  const crateM = new THREE.MeshStandardMaterial({ map: TEX.wood(), color: 0x8a7358, roughness: 0.85 });
   const crateStripeM = mat(BLACK);
   const crateAt = (x, y, z) => {
     const grp = new THREE.Group();
@@ -600,7 +680,9 @@ export function buildWorld(scene, physics) {
     box(0.8, 7, 0.8, i === 5 ? ORANGE : BLACK, 6, null, 0, g2);
     box(13, 1.6, 1, i === 5 ? ORANGE : BLACK, 0, 6.6, 0, g2);
     const tex = signTexture(step, [`STEP ${i + 1} OF 6`], { bg: i === 5 ? '#ff5a00' : '#121212', fg: '#ffffff', accent: i === 5 ? '#121212' : '#ff5a00' });
-    const label = new THREE.Mesh(new THREE.PlaneGeometry(11, 3), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.85 }));
+    const label = new THREE.Mesh(new THREE.PlaneGeometry(11, 3), new THREE.MeshStandardMaterial({
+      map: tex, emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 1.25, roughness: 0.6,
+    }));
     label.position.set(0, 4.4, 0.55); g2.add(label);
     const label2 = label.clone(); label2.rotation.y = Math.PI; label2.position.z = -0.55; g2.add(label2);
     world.add(g2);
@@ -613,32 +695,36 @@ export function buildWorld(scene, physics) {
   const drive = makeSign('DRIVE!', ['EXPLORE THE WORLD'], 11);
   drive.position.set(16, 5, 34); world.add(drive); floaters.push(drive);
 
-  // --- clouds: soft billboard puffs (drift in the loop) ---
-  const puffTex = (() => {
-    const c = document.createElement('canvas'); c.width = 256; c.height = 128;
-    const g = c.getContext('2d');
-    for (let i = 0; i < 16; i++) {
-      const x = 34 + hash(i, 4) * 188, y = 44 + hash(9, i) * 40, r = 20 + hash(i, i) * 30;
-      const gr = g.createRadialGradient(x, y, 2, x, y, r);
-      gr.addColorStop(0, 'rgba(255,255,255,0.55)'); gr.addColorStop(0.7, 'rgba(255,255,255,0.22)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
-      g.fillStyle = gr; g.fillRect(0, 0, 256, 128);
+  // --- night sky: deterministic starfield + moon (no daytime clouds) ---
+  { const starGeo = new THREE.BufferGeometry();
+    const starPos = new Float32Array(900 * 3);
+    for (let i = 0; i < 900; i++) {
+      const az = hash(i, 11) * Math.PI * 2;
+      const y = 0.1 + hash(i, 23) * 0.9;
+      const rxz = Math.sqrt(Math.max(0, 1 - y * y));
+      starPos[i * 3] = Math.cos(az) * rxz * 2600;
+      starPos[i * 3 + 1] = y * 2600;
+      starPos[i * 3 + 2] = Math.sin(az) * rxz * 2600;
     }
-    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
-  })();
-  for (let i = 0; i < 13; i++) {
-    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: puffTex, transparent: true, opacity: 0.75, depthWrite: false, fog: false }));
-    const w = 90 + hash(i, 6) * 110;
-    sp.scale.set(w, w * 0.36, 1);
-    const a = i * 2.4;
-    sp.position.set(Math.cos(a) * (120 + (i % 4) * 38), 95 + (i % 3) * 22, Math.sin(a) * (120 + (i % 4) * 38));
-    world.add(sp); drifters.push(sp);
-  }
+    starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
+    const skyStars = new THREE.Points(starGeo, new THREE.PointsMaterial({
+      color: 0xcfe4f5, size: 7, sizeAttenuation: true, transparent: true, opacity: 0.8, fog: false, depthWrite: false,
+    }));
+    skyStars.frustumCulled = false; world.add(skyStars);
+    const moon = new THREE.Mesh(new THREE.CircleGeometry(72, 40),
+      new THREE.MeshBasicMaterial({ fog: false }));
+    moon.material.color.setRGB(1.35, 1.48, 1.62);
+    moon.position.set(-980, 720, -1880); moon.lookAt(0, 0, 0); world.add(moon);
+    const moonGlow = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: glowTex, color: 0xaaccee, transparent: true, opacity: 0.32, depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
+    }));
+    moonGlow.scale.setScalar(430); moonGlow.position.copy(moon.position); world.add(moonGlow); }
 
   // --- horizon: near green hills (vertex-colour gradient) + far mountains ---
   const hillGeo = new THREE.SphereGeometry(1, 24, 16);
   { const pos = hillGeo.attributes.position, v = new THREE.Vector3();
     const colors = new Float32Array(pos.count * 3);
-    const base = new THREE.Color(0x4e6c41), top = new THREE.Color(0x8b9078), c = new THREE.Color();
+    const base = new THREE.Color(0x05080a), top = new THREE.Color(0x111a20), c = new THREE.Color();
     for (let i = 0; i < pos.count; i++) {
       v.fromBufferAttribute(pos, i);
       c.lerpColors(base, top, THREE.MathUtils.clamp(v.y * 0.5 + 0.5, 0, 1));
@@ -654,7 +740,7 @@ export function buildWorld(scene, physics) {
     hill.position.set(Math.cos(a) * r, -4, Math.sin(a) * r);
     world.add(hill);
   }
-  const mtnM = mat(0x8799a8, { roughness: 1, flatShading: true });
+  const mtnM = mat(0x0a1119, { roughness: 1, flatShading: true });
   for (let i = 0; i < 8; i++) {
     const a = (i / 8) * Math.PI * 2 + 0.9;
     const h = 110 + hash(i, 12) * 90;
@@ -673,5 +759,5 @@ export function buildWorld(scene, physics) {
     box(2, 2, 9, BLACK, -118, null, i * 22, world); box(2, 2, 9, BLACK, 118, null, i * 22, world);
   }
 
-  return { floaters, drifters, stars, sun };
+  return { floaters, drifters, stars, sun, reflector };
 }

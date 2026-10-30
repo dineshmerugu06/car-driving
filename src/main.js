@@ -5,6 +5,11 @@
 // silent black screen (window.__showError surfaces any failure on-page).
 import * as THREE from 'three';
 import { Sky } from 'three/addons/objects/Sky.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { buildWorld, ZONES, SUN_DIR } from './world/World.js';
 import { Car, input } from './car/Car.js';
 import { createHud } from './ui/Hud.js';
@@ -15,6 +20,62 @@ import { Dust } from './fx/Dust.js';
 const SMOKE = new URLSearchParams(location.search).has('smoke');
 const container = document.getElementById('app');
 const smokeEl = document.getElementById('smoke');
+
+// One pre-baked 512² noise source for the whole film grade (samsy's
+// noisebake pattern): generated once, sampled by the composite — never
+// computed per-pixel per-frame.
+function makeNoiseTexture() {
+  const s = 512, c = document.createElement('canvas'); c.width = c.height = s;
+  const g = c.getContext('2d'); const img = g.createImageData(s, s); const d = img.data;
+  const h = (x, y, seed) => { const v = Math.sin(x * 127.1 + y * 311.7 + seed * 74.7) * 43758.5453; return v - Math.floor(v); };
+  for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
+    const i = (y * s + x) * 4;
+    d[i] = h(x, y, 1) * 255; d[i + 1] = h(x, y, 2) * 255; d[i + 2] = h(x, y, 3) * 255; d[i + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.generateMipmaps = false; t.minFilter = THREE.LinearFilter; t.magFilter = THREE.LinearFilter;
+  return t;
+}
+
+// Finishing composite (adapted from the 3d-ninja dossier §2): vignette,
+// baked-noise grain, a subliminal animated scanline and edge-only RGB
+// split — one pass, applied in linear HDR before OutputPass.
+const GradeShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    uTime: { value: 0 },
+    uNoise: { value: null },
+    uResolution: { value: new THREE.Vector2(innerWidth, innerHeight) },
+  },
+  vertexShader: `
+    varying vec2 vUv;
+    void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: `
+    uniform sampler2D tDiffuse;
+    uniform sampler2D uNoise;
+    uniform float uTime;
+    uniform vec2 uResolution;
+    varying vec2 vUv;
+    void main() {
+      vec2 uv = vUv;
+      float d = distance(uv, vec2(0.5)) * 1.28;
+      float ca = 0.0016 * smoothstep(0.15, 0.8, d);
+      vec3 col;
+      col.r = texture2D(tDiffuse, uv + vec2(ca, 0.0)).r;
+      col.g = texture2D(tDiffuse, uv).g;
+      col.b = texture2D(tDiffuse, uv - vec2(ca, 0.0)).b;
+      float vig = smoothstep(1.05, 0.32, d);
+      col *= mix(0.55, 1.0, vig);
+      float luma = dot(col, vec3(0.2125, 0.7154, 0.0721));
+      vec2 nuv = fract(uv * vec2(3.0, 2.0) + vec2(fract(uTime * 0.37) * 0.71, fract(uTime * 0.53) * 0.43));
+      float grain = texture2D(uNoise, nuv).r;
+      col += (grain - 0.5) * 0.055 * (0.35 + 0.65 * (1.0 - clamp(luma, 0.0, 1.0)));
+      col += sin(uv.y * uResolution.y * 3.14159 - uTime * 6.28318) * 0.005;
+      gl_FragColor = vec4(col, 1.0);
+    }`,
+};
 
 async function boot() {
   const scene = new THREE.Scene();
@@ -28,7 +89,7 @@ async function boot() {
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 0.85;
+  renderer.toneMappingExposure = 1.0;
   container.appendChild(renderer.domElement);
 
   // Image-based lighting generated from the SAME sky the player sees (the
@@ -39,14 +100,31 @@ async function boot() {
   const envScene = new THREE.Scene();
   const envSky = new Sky();
   envSky.scale.setScalar(100);
-  envSky.material.uniforms.turbidity.value = 6;
-  envSky.material.uniforms.rayleigh.value = 2.2;
-  envSky.material.uniforms.mieCoefficient.value = 0.004;
+  envSky.material.uniforms.turbidity.value = 8;
+  envSky.material.uniforms.rayleigh.value = 2.8;
+  envSky.material.uniforms.mieCoefficient.value = 0.006;
   envSky.material.uniforms.mieDirectionalG.value = 0.85;
   envSky.material.uniforms.sunPosition.value.copy(SUN_DIR);
   envScene.add(envSky);
   scene.environment = pmrem.fromScene(envScene, 0.04).texture;
-  scene.environmentIntensity = 0.45;
+  scene.environmentIntensity = 0.3;
+
+  // --- post chain (3d-ninja recipe, WebGL form) ---
+  // RenderPass (linear HDR) -> UnrealBloom fed only by authored emissive
+  // (threshold .82 stands in for his MRT emissive channel: scene surfaces
+  // stay under it, signs/lamps/windows/rings are authored over it) ->
+  // finishing grade -> OutputPass (ACES + sRGB).
+  const composer = new EffectComposer(renderer);
+  composer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  composer.setSize(innerWidth, innerHeight);
+  composer.addPass(new RenderPass(scene, camera));
+  const bloomPass = new UnrealBloomPass(
+    new THREE.Vector2(innerWidth, innerHeight), 0.34, 0.27 * Math.min(devicePixelRatio, 2), 0.82);
+  composer.addPass(bloomPass);
+  const gradePass = new ShaderPass(GradeShader);
+  gradePass.uniforms.uNoise.value = makeNoiseTexture();
+  composer.addPass(gradePass);
+  composer.addPass(new OutputPass());
 
   let physics = null;
   try {
@@ -57,7 +135,7 @@ async function boot() {
   }
 
   const audio = new AudioEngine();
-  const { floaters, drifters, stars, sun } = buildWorld(scene, physics);
+  const { floaters, drifters, stars, sun, reflector } = buildWorld(scene, physics);
   const car = new Car(scene, physics, audio);
   const dust = new Dust(scene);
   floaters.forEach((f) => { f.userData.baseY = f.position.y; });
@@ -74,7 +152,11 @@ async function boot() {
   if (!physics) setTimeout(() => hud.toast('Lite mode: physics offline — driving still works'), 800);
 
   function setQuality(high) {
-    renderer.setPixelRatio(high ? Math.min(devicePixelRatio, 2) : 1);
+    const dpr = high ? Math.min(devicePixelRatio, 2) : 1;
+    renderer.setPixelRatio(dpr);
+    composer.setPixelRatio(dpr);
+    bloomPass.enabled = high;
+    if (reflector) reflector.visible = high;
     sun.castShadow = high;
     if (car.headlightSpots) for (const s of car.headlightSpots) s.visible = high;
   }
@@ -191,7 +273,8 @@ async function boot() {
     if (!dragging) orbitYaw *= Math.pow(0.4, dt);
 
     hud.update(car);
-    renderer.render(scene, camera);
+    gradePass.uniforms.uTime.value = elapsed;
+    composer.render();
   }
   animate();
 
@@ -199,6 +282,8 @@ async function boot() {
     camera.aspect = innerWidth / innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(innerWidth, innerHeight);
+    composer.setSize(innerWidth, innerHeight);
+    gradePass.uniforms.uResolution.value.set(innerWidth, innerHeight);
   });
 }
 

@@ -248,11 +248,11 @@ export class Car {
     // and skin panels ('F40_Skin'), lit by the scene environment — flat
     // tinting alone is what made it read as cartoon.
     const paintMat = new THREE.MeshPhysicalMaterial({
-      // Base deepened past Rosso Corsa #FF2800: the bright sky IBL adds
-      // white-blue diffuse light that washes a pure #FF2800 to pink, so the
-      // albedo compensates — rendered result lands on Rosso Corsa.
-      color: 0xd21f02, metalness: 0.04, roughness: 0.32,
-      clearcoat: 1, clearcoatRoughness: 0.05, envMapIntensity: 0.5,
+      // Dusk IBL is dim and blue, so the V5 compensation is inverted: a
+      // brighter Rosso Corsa with a tighter clearcoat, so the shell reads
+      // red under lamps/headlights without catching bloom itself.
+      color: 0xe02302, metalness: 0.04, roughness: 0.22,
+      clearcoat: 1, clearcoatRoughness: 0.03, envMapIntensity: 1.0,
     });
     wrap.traverse((o) => {
       if (!o.isMesh) return;
@@ -302,12 +302,30 @@ export class Car {
 
     // Keep real headlights (quality toggle in main.js uses headlightSpots).
     this.headlightSpots = [];
+    const glowTexture = (rgb) => {
+      const c = document.createElement('canvas'); c.width = c.height = 128;
+      const g = c.getContext('2d');
+      const grad = g.createRadialGradient(64, 64, 2, 64, 64, 64);
+      grad.addColorStop(0, `rgba(${rgb},0.9)`); grad.addColorStop(0.35, `rgba(${rgb},0.32)`); grad.addColorStop(1, `rgba(${rgb},0)`);
+      g.fillStyle = grad; g.fillRect(0, 0, 128, 128);
+      return new THREE.CanvasTexture(c);
+    };
+    const headGlowTex = glowTexture('255,215,150');
+    const tailGlowTex = glowTexture('255,45,25');
     for (const s of [-1, 1]) {
-      const spot = new THREE.SpotLight(0xffe2b0, 90, 42, 0.52, 0.65, 1.1);
+      const spot = new THREE.SpotLight(0xffe2b0, 175, 48, 0.5, 0.55, 1.15);
       spot.position.set(s * 0.62, 0.62, -1.85);
       spot.target.position.set(s * 0.85, 0.05, -11);
       this.bodyG.add(spot); this.bodyG.add(spot.target);
       this.headlightSpots.push(spot);
+      const headGlow = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: headGlowTex, transparent: true, opacity: 0.55, depthWrite: false, blending: THREE.AdditiveBlending,
+      }));
+      headGlow.scale.setScalar(1.15); headGlow.position.set(s * 0.62, 0.62, -2.02); this.bodyG.add(headGlow);
+      const tailGlow = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: tailGlowTex, transparent: true, opacity: 0.45, depthWrite: false, blending: THREE.AdditiveBlending,
+      }));
+      tailGlow.scale.set(0.6, 0.35, 1); tailGlow.position.set(s * 0.64, 0.74, 2.02); this.bodyG.add(tailGlow);
     }
     this.modelLoaded = true;
   }
