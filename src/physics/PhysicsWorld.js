@@ -19,9 +19,10 @@ export class PhysicsWorld {
     this.acc = 0;
     this.carCollider = null;  // set by Car so collisions can be attributed
     this.onCarCollision = null; // (otherHandle, started) => {}
-    // world floor (also catches anything that escapes)
+    // world floor (also catches anything that escapes) — sized for the
+    // ninja city, whose kit spans ±850
     const floor = this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(0, -1, 0));
-    this.world.createCollider(RAPIER.ColliderDesc.cuboid(400, 1, 400).setFriction(0.9), floor);
+    this.world.createCollider(RAPIER.ColliderDesc.cuboid(1500, 1, 1500).setFriction(0.9), floor);
   }
 
   // --- static geometry -------------------------------------------------

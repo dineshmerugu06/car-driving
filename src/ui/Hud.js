@@ -13,17 +13,17 @@ export function createHud(root, car, callbacks = {}) {
         <p class="controls-list">W / &uarr; accelerate &middot; S / &darr; brake &amp; reverse<br/>
         A D / &larr; &rarr; steer &middot; SPACE handbrake + jump &middot; R respawn &middot; H honk &middot; L mute<br/>
         Drag mouse to orbit camera &middot; scroll to zoom &middot; touch pedals on mobile<br/>
-        Ram the cones &amp; crates. Drive up the ramps. Collect a &star; in every zone.</p>
+        Samsy&rsquo;s city, rebuilt from its own kit. Discover all 7 zones.</p>
         <button id="startBtn">START DRIVING &rarr;</button>
       </div>
     </div>
     <div id="topbar">
       <span class="logo">MERUGU<b>.</b></span>
       <span class="top-right">
-        <span id="starsCount" class="chip">&star; 0/${ZONES.length}</span>
+        <span id="starsCount" class="chip">ZONES 0/${ZONES.length}</span>
         <button id="qualityBtn" class="chip btn">QUALITY: HIGH</button>
         <button id="muteBtn" class="chip btn">SOUND: ON</button>
-        <span class="hint">Drive into orange rings</span>
+        <span class="hint">Explore the city</span>
       </span>
     </div>
     <div id="toast" class="hidden"></div>
@@ -105,7 +105,7 @@ export function createHud(root, car, callbacks = {}) {
     start,
     toast,
     setMuted,
-    setStars(n) { starsEl.innerHTML = `&star; ${n}/${ZONES.length}`; },
+    setStars(n) { starsEl.textContent = `ZONES ${n}/${ZONES.length}`; },
     update(carRef) {
       kmhEl.textContent = carRef.kmh;
       let found = null;
@@ -122,6 +122,7 @@ export function createHud(root, car, callbacks = {}) {
           panel.classList.remove('pop'); void panel.offsetWidth; panel.classList.add('pop');
           const first = !discovered.has(found.id);
           discovered.add(found.id);
+          starsEl.textContent = `ZONES ${discovered.size}/${ZONES.length}`;
           if (callbacks.onZoneEnter) callbacks.onZoneEnter(found, first);
         } else panel.classList.add('hidden');
       }

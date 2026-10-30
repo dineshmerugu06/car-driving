@@ -162,7 +162,7 @@ async function boot() {
   }
 
   // --- camera orbit offset: mouse drag + wheel/pinch zoom ---
-  let orbitYaw = 0, orbitPitch = 0.4, camDist = 15.5, dragging = false, px = 0, py = 0;
+  let orbitYaw = 0, orbitPitch = 0.24, camDist = 13.5, dragging = false, px = 0, py = 0;
   const el = renderer.domElement;
   el.addEventListener('pointerdown', (e) => { dragging = true; px = e.clientX; py = e.clientY; });
   addEventListener('pointerup', () => { dragging = false; });

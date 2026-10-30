@@ -18,7 +18,7 @@ const KEYMAP = {
   KeyA: 'left', ArrowLeft: 'left', KeyD: 'right', ArrowRight: 'right', Space: 'handbrake',
 };
 
-const SPAWN = { x: 0, z: 92 };
+const SPAWN = { x: 110, z: -30 }; // the dense pocket: ramps, tower and walls ahead
 const SPAWN_Y = 0.15; // small drop-in on spawn/reset
 const MAX_FWD = 30, MAX_REV = -11; // 30 u/s = 108 km/h on the speedo
 
@@ -218,22 +218,23 @@ export class Car {
   get kmh() { return Math.round(Math.abs(this.speed) * 3.6); }
   get speedRatio() { return Math.abs(this.speed) / MAX_FWD; }
 
-  // ---------------- real model (Ferrari F40 GLB) ----------------
+  // ---------------- real model (Lamborghini Gallardo LP560 GLB) ---------
   // Visual swap only: Rapier body, collider and arcade control are unchanged.
   // The procedural car stays as the instant spawn + fallback if the GLB
   // fails to load — never a missing car.
   loadModel() {
-    const url = new URL('assets/models/ferrari.glb', document.baseURI).href;
+    const url = new URL('assets/models/lamborghini.glb', document.baseURI).href;
     new GLTFLoader().load(url,
       (gltf) => { try { this.applyModel(gltf.scene); } catch (e) { console.warn('Model apply failed — keeping procedural car', e); } },
       undefined,
-      (err) => console.warn('Ferrari model failed to load — keeping procedural car', err));
+      (err) => console.warn('Lamborghini model failed to load — keeping procedural car', err));
   }
 
   applyModel(model) {
-    // Normalize: model front is +Z and length is Z (4.53) — rotate so the
-    // nose faces -Z like the procedural car, scale length to the 3.9 the
-    // collider was tuned for, rest the wheels on y=0, centre x/z.
+    // Normalize: the Gallardo's nose is +Z (headlights z +1.92, tails -1.86),
+    // length is Z (4.72) — rotate so the nose faces -Z like the procedural
+    // car, scale length to the 3.9 the collider was tuned for, rest the
+    // wheels on y=0, centre x/z.
     const wrap = new THREE.Group();
     const box = new THREE.Box3().setFromObject(model);
     const size = box.getSize(new THREE.Vector3());
@@ -242,22 +243,25 @@ export class Car {
     wrap.add(model);
     wrap.scale.setScalar(3.9 / size.z);
     wrap.rotation.y = Math.PI;
-    // The GLB ships its paint materials black/grey — the showroom recolors
-    // them at runtime. Do the same, properly: a clearcoat physical paint
-    // (Rosso Corsa #FF2800, their own palette) on the body shell ('material')
-    // and skin panels ('F40_Skin'), lit by the scene environment — flat
-    // tinting alone is what made it read as cartoon.
+    // The GLB ships its paint grey (the showroom recolors at runtime). Do
+    // the same: a clearcoat physical Giallo — the Gallardo colour — on both
+    // paint materials, lit by the scene environment so it reads as a real
+    // shell against the black city.
     const paintMat = new THREE.MeshPhysicalMaterial({
-      // Dusk IBL is dim and blue, so the V5 compensation is inverted: a
-      // brighter Rosso Corsa with a tighter clearcoat, so the shell reads
-      // red under lamps/headlights without catching bloom itself.
-      color: 0xe02302, metalness: 0.04, roughness: 0.22,
-      clearcoat: 1, clearcoatRoughness: 0.03, envMapIntensity: 1.0,
+      color: 0xffbe0a, metalness: 0.05, roughness: 0.27,
+      clearcoat: 1, clearcoatRoughness: 0.05, envMapIntensity: 0.95,
     });
     wrap.traverse((o) => {
       if (!o.isMesh) return;
       o.castShadow = true;
-      const swap = (m) => (m && (m.name === 'F40_Skin' || m.name === 'material')) ? paintMat : m;
+      const swap = (m) => {
+        if (!m) return m;
+        if (m.name === 'gallardo_paint' || m.name === 'gallardo_paint.001') return paintMat;
+        // tail lights glow red so the rear reads at night (brake state is
+        // still driven through the dummy brakeMat, like the F40 before it)
+        if (m.name.includes('taillight') && m.isMeshStandardMaterial) { m.emissive = new THREE.Color(0xff1a05); m.emissiveIntensity = 1.5; }
+        return m;
+      };
       o.material = Array.isArray(o.material) ? o.material.map(swap) : swap(o.material);
     });
 
@@ -265,11 +269,28 @@ export class Car {
     this.bodyG.clear();
     this.bodyG.add(wrap);
     this.frontWheels = []; this.spinWheels = [];
-    this.brakeMat = mat(0x881111, { emissive: 0xff2211, emissiveIntensity: 0.8 }); // dummy: F40 rear lights are baked into the model
-    this._wheelRadius = 0.29;
+    this.brakeMat = mat(0x881111, { emissive: 0xff2211, emissiveIntensity: 0.8 }); // dummy: tail lights live in the model
+    this._wheelRadius = 0.32;
 
-    // Extract the wheel meshes (and their brake discs) into steer/spin
-    // pivots in body space, so the game feel (steering + rolling) survives.
+    // Contact shadow: the city floor is a reflector (no shadow receiving),
+    // so a soft blob grounds the car the way his avatar is grounded.
+    if (!this._blob) {
+      const c = document.createElement('canvas'); c.width = c.height = 128;
+      const g = c.getContext('2d');
+      const grad = g.createRadialGradient(64, 64, 4, 64, 64, 62);
+      grad.addColorStop(0, 'rgba(0,0,0,0.62)'); grad.addColorStop(0.7, 'rgba(0,0,0,0.34)'); grad.addColorStop(1, 'rgba(0,0,0,0)');
+      g.fillStyle = grad; g.fillRect(0, 0, 128, 128);
+      this._blob = new THREE.Mesh(new THREE.PlaneGeometry(2.9, 4.7),
+        new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false }));
+      this._blob.rotation.x = -Math.PI / 2; this._blob.position.y = 0.03; this._blob.renderOrder = 1;
+      this.group.add(this._blob);
+    }
+
+    // Wheels: the model splits each wheel into material fragments (rims,
+    // brake discs, calipers) across many meshes. Cluster the fragments by
+    // corner in body space and lift each cluster into a steer/spin pivot —
+    // the same trick as the F40, adapted to fragments instead of whole
+    // wheel meshes.
     this.bodyG.updateWorldMatrix(true, true);
     const toBody = new THREE.Matrix4().copy(this.bodyG.matrixWorld).invert();
     const parts = [];
@@ -280,24 +301,34 @@ export class Car {
       const bb = geo.boundingBox;
       const c = bb.getCenter(new THREE.Vector3());
       const s = bb.getSize(new THREE.Vector3());
-      parts.push({ mesh: o, geo, c, s });
+      parts.push({ mesh: o, geo, c, s, name: o.name || '' });
     });
-    const isWheel = (p) => p.s.y > 0.5 && p.s.y < 0.82 && p.s.x > 0.18 && p.s.x < 0.46 && p.s.z > 0.5 && p.s.z < 0.82
-      && Math.abs(p.c.x) > 0.55 && Math.abs(p.c.x) < 1.0 && p.c.y > 0.18 && p.c.y < 0.52 && Math.abs(p.c.z) > 0.85 && Math.abs(p.c.z) < 1.35;
-    const wheels = parts.filter(isWheel);
-    for (const w of wheels) {
-      const pivot = new THREE.Group(); pivot.position.copy(w.c); this.bodyG.add(pivot);
+    const inWheelZone = (p) => Math.abs(p.c.x) > 0.5 && Math.abs(p.c.x) < 0.92
+      && p.c.y > 0.06 && p.c.y < 0.56 && Math.abs(p.c.z) > 0.72 && Math.abs(p.c.z) < 1.38;
+    const isWheelPart = (p) => /wheel|amdb11|brake|caliper/i.test(p.name) && inWheelZone(p);
+    const notBody = (p) => !/fender|body|bumper|door|skirt|spoiler|hood|mirror/i.test(p.name);
+    const clusters = new Map();
+    for (const p of parts.filter(isWheelPart)) {
+      const key = `${Math.sign(p.c.x)},${Math.sign(p.c.z)}`;
+      if (!clusters.has(key)) clusters.set(key, []);
+      clusters.get(key).push(p);
+    }
+    for (const members of clusters.values()) {
+      const ctr = new THREE.Vector3();
+      members.forEach((p) => ctr.add(p.c)); ctr.divideScalar(members.length);
+      const pivot = new THREE.Group(); pivot.position.copy(ctr); this.bodyG.add(pivot);
       const spin = new THREE.Group(); pivot.add(spin);
       const take = (p) => {
-        p.geo.translate(-w.c.x, -w.c.y, -w.c.z);
+        p.geo.translate(-ctr.x, -ctr.y, -ctr.z);
         const m = new THREE.Mesh(p.geo, p.mesh.material); m.castShadow = true; spin.add(m);
         if (p.mesh.parent) p.mesh.parent.remove(p.mesh);
+        p.taken = true;
       };
-      take(w);
-      // brake discs etc. sitting at the same centre ride along
-      for (const p of parts) if (p !== w && p.mesh.parent && p.c.distanceTo(w.c) < 0.09) take(p);
+      members.forEach(take);
+      // any other fragment sitting at the same centre rides along
+      for (const p of parts) if (!p.taken && p.mesh.parent && notBody(p) && p.c.distanceTo(ctr) < 0.3) take(p);
       this.spinWheels.push(spin);
-      if (w.c.z < 0) this.frontWheels.push(pivot); // body-space front is -Z
+      if (ctr.z < 0) this.frontWheels.push(pivot); // body-space front is -Z
     }
 
     // Keep real headlights (quality toggle in main.js uses headlightSpots).
@@ -314,18 +345,18 @@ export class Car {
     const tailGlowTex = glowTexture('255,45,25');
     for (const s of [-1, 1]) {
       const spot = new THREE.SpotLight(0xffe2b0, 175, 48, 0.5, 0.55, 1.15);
-      spot.position.set(s * 0.62, 0.62, -1.85);
-      spot.target.position.set(s * 0.85, 0.05, -11);
+      spot.position.set(s * 0.56, 0.52, -1.6);
+      spot.target.position.set(s * 0.8, 0.02, -10.5);
       this.bodyG.add(spot); this.bodyG.add(spot.target);
       this.headlightSpots.push(spot);
       const headGlow = new THREE.Sprite(new THREE.SpriteMaterial({
-        map: headGlowTex, transparent: true, opacity: 0.55, depthWrite: false, blending: THREE.AdditiveBlending,
+        map: headGlowTex, transparent: true, opacity: 0.3, depthWrite: false, blending: THREE.AdditiveBlending,
       }));
-      headGlow.scale.setScalar(1.15); headGlow.position.set(s * 0.62, 0.62, -2.02); this.bodyG.add(headGlow);
+      headGlow.scale.setScalar(0.55); headGlow.position.set(s * 0.56, 0.48, -1.62); this.bodyG.add(headGlow);
       const tailGlow = new THREE.Sprite(new THREE.SpriteMaterial({
         map: tailGlowTex, transparent: true, opacity: 0.45, depthWrite: false, blending: THREE.AdditiveBlending,
       }));
-      tailGlow.scale.set(0.6, 0.35, 1); tailGlow.position.set(s * 0.64, 0.74, 2.02); this.bodyG.add(tailGlow);
+      tailGlow.scale.set(0.55, 0.32, 1); tailGlow.position.set(s * 0.5, 0.66, 1.56); this.bodyG.add(tailGlow);
     }
     this.modelLoaded = true;
   }
