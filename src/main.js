@@ -162,7 +162,7 @@ async function boot() {
   }
 
   // --- camera orbit offset: mouse drag + wheel/pinch zoom ---
-  let orbitYaw = 0, orbitPitch = 0.3, camDist = 20, dragging = false, px = 0, py = 0;
+  let orbitYaw = 0, orbitPitch = 0.3, camDist = 58, dragging = false, px = 0, py = 0;
   const el = renderer.domElement;
   el.addEventListener('pointerdown', (e) => { dragging = true; px = e.clientX; py = e.clientY; });
   addEventListener('pointerup', () => { dragging = false; });
@@ -172,12 +172,12 @@ async function boot() {
     orbitPitch = THREE.MathUtils.clamp(orbitPitch + (e.clientY - py) * 0.004, 0.08, 1.1);
     px = e.clientX; py = e.clientY;
   });
-  el.addEventListener('wheel', (e) => { e.preventDefault(); camDist = THREE.MathUtils.clamp(camDist + e.deltaY * 0.02, 9, 34); }, { passive: false });
+  el.addEventListener('wheel', (e) => { e.preventDefault(); camDist = THREE.MathUtils.clamp(camDist + e.deltaY * 0.05, 24, 120); }, { passive: false });
   let lastPinch = 0;
   el.addEventListener('touchmove', (e) => {
     if (e.touches.length === 2) {
       const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
-      if (lastPinch) camDist = THREE.MathUtils.clamp(camDist - (d - lastPinch) * 0.05, 9, 34);
+      if (lastPinch) camDist = THREE.MathUtils.clamp(camDist - (d - lastPinch) * 0.08, 24, 120);
       lastPinch = d;
     }
   }, { passive: true });
@@ -262,13 +262,13 @@ async function boot() {
     const backYaw = car.heading + orbitYaw;
     desired.set(
       car.pos.x + Math.sin(backYaw) * Math.cos(orbitPitch) * camDist,
-      car.y + 1.85 + Math.sin(orbitPitch) * camDist,
+      car.y + 5 + Math.sin(orbitPitch) * camDist,
       car.pos.z + Math.cos(backYaw) * Math.cos(orbitPitch) * camDist,
     );
     if (desired.y < 1.5) desired.y = 1.5; // never clip into the ground
     camera.position.lerp(desired, 1 - Math.pow(0.0001, dt));
     if (camera.position.y < 1.2) camera.position.y = 1.2;
-    camTarget.set(car.pos.x, car.y + 1.85, car.pos.z);
+    camTarget.set(car.pos.x, car.y + 5, car.pos.z);
     camera.lookAt(camTarget);
     if (!dragging) orbitYaw *= Math.pow(0.4, dt);
 
