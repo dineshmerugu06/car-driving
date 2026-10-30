@@ -162,7 +162,7 @@ async function boot() {
   }
 
   // --- camera orbit offset: mouse drag + wheel/pinch zoom ---
-  let orbitYaw = 0, orbitPitch = 0.24, camDist = 13.5, dragging = false, px = 0, py = 0;
+  let orbitYaw = 0, orbitPitch = 0.3, camDist = 20, dragging = false, px = 0, py = 0;
   const el = renderer.domElement;
   el.addEventListener('pointerdown', (e) => { dragging = true; px = e.clientX; py = e.clientY; });
   addEventListener('pointerup', () => { dragging = false; });
@@ -172,12 +172,12 @@ async function boot() {
     orbitPitch = THREE.MathUtils.clamp(orbitPitch + (e.clientY - py) * 0.004, 0.08, 1.1);
     px = e.clientX; py = e.clientY;
   });
-  el.addEventListener('wheel', (e) => { e.preventDefault(); camDist = THREE.MathUtils.clamp(camDist + e.deltaY * 0.02, 7, 26); }, { passive: false });
+  el.addEventListener('wheel', (e) => { e.preventDefault(); camDist = THREE.MathUtils.clamp(camDist + e.deltaY * 0.02, 9, 34); }, { passive: false });
   let lastPinch = 0;
   el.addEventListener('touchmove', (e) => {
     if (e.touches.length === 2) {
       const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
-      if (lastPinch) camDist = THREE.MathUtils.clamp(camDist - (d - lastPinch) * 0.05, 7, 26);
+      if (lastPinch) camDist = THREE.MathUtils.clamp(camDist - (d - lastPinch) * 0.05, 9, 34);
       lastPinch = d;
     }
   }, { passive: true });

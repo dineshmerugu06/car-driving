@@ -68,9 +68,9 @@ export class Car {
         .setCanSleep(false).setCcdEnabled(true));
     // Collider spans the whole car (wheels to roof) in the body frame, whose
     // origin is the mesh origin at ground level — so the body rests at y=0.
-    // Sized for the large car (6.8 long — see applyModel).
+    // Sized for the Senna at actual size (10.2 long — see applyModel).
     this.collider = P.world.createCollider(
-      RAPIER.ColliderDesc.cuboid(1.71, 0.89, 3.31).setTranslation(0, 0.89, 0)
+      RAPIER.ColliderDesc.cuboid(2.21, 1.05, 4.8).setTranslation(0, 1.05, 0)
         .setDensity(2.2).setFriction(0.25).setRestitution(0.05)
         .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS),
       this.body);
@@ -224,30 +224,43 @@ export class Car {
   // The procedural car stays as the instant spawn + fallback if the GLB
   // fails to load — never a missing car.
   loadModel() {
-    const url = new URL('assets/models/lamborghini.glb', document.baseURI).href;
+    const url = new URL('assets/models/senna.glb', document.baseURI).href;
     new GLTFLoader().load(url,
       (gltf) => { try { this.applyModel(gltf.scene); } catch (e) { console.warn('Model apply failed — keeping procedural car', e); } },
       undefined,
-      (err) => console.warn('Lamborghini model failed to load — keeping procedural car', err));
+      (err) => console.warn('Senna model failed to load — keeping procedural car', err));
   }
 
   applyModel(model) {
-    // Normalize: the Gallardo's nose is +Z (headlights z +1.92, tails -1.86),
-    // length is Z (4.72) — rotate so the nose faces -Z like the procedural
-    // car, scale length to the 3.9 the collider was tuned for, rest the
-    // wheels on y=0, centre x/z.
+    // McLaren Senna (Otherlife showroom GLB). NOTE: this file's nodes carry
+    // matrix transforms, so offline TRS parsing reads its axes wrong — as
+    // loaded by GLTFLoader it is Y-up with the length along Z. Everything
+    // below is therefore measured from the loaded model at runtime: length
+    // axis, front direction (from the headlight meshes), wheel corners.
+    // Scale target: ACTUAL presence size against this city — 10.2 long
+    // (Dinesh: 3.9 -> 5.2 -> 6.8 all still read small). Colour: red.
+    model.updateWorldMatrix(true, true);
+    const box0 = new THREE.Box3().setFromObject(model);
+    const size0 = box0.getSize(new THREE.Vector3());
+    const center0 = box0.getCenter(new THREE.Vector3());
+    // front = the end the headlight-named meshes sit on (length axis = Z)
+    let headZ = null;
+    model.traverse((o) => {
+      if (o.isMesh && /headlight/i.test(o.name || '')) {
+        const c = new THREE.Box3().setFromObject(o).getCenter(new THREE.Vector3());
+        headZ = headZ === null ? c.z : (headZ + c.z) / 2;
+      }
+    });
+    const frontIsPlusZ = headZ !== null && headZ > center0.z;
+
     const wrap = new THREE.Group();
-    const box = new THREE.Box3().setFromObject(model);
-    const size = box.getSize(new THREE.Vector3());
-    const center = box.getCenter(new THREE.Vector3());
-    model.position.set(-center.x, -box.min.y, -center.z);
+    model.position.set(-center0.x, -box0.min.y, -center0.z);
     wrap.add(model);
-    wrap.scale.setScalar(6.8 / size.z); // large: 6.8 long (3.9 F40 tune -> 5.2 -> 6.8, Dinesh: still short)
-    wrap.rotation.y = Math.PI;
-    // The GLB ships its paint grey (the showroom recolors at runtime). Do
-    // the same: a clearcoat physical red (Dinesh's colour call) on both
-    // paint materials, lit by the scene environment so it reads as a real
-    // shell against the black city.
+    wrap.scale.setScalar(10.2 / size0.z);
+    if (frontIsPlusZ) wrap.rotation.y = Math.PI; // game forward is -Z
+
+    // Runtime recolor like the showroom: both senna paint materials become
+    // the red clearcoat (Dinesh's colour), tail/head light materials glow.
     const paintMat = new THREE.MeshPhysicalMaterial({
       color: 0xee1c00, metalness: 0.05, roughness: 0.27,
       clearcoat: 1, clearcoatRoughness: 0.05, envMapIntensity: 0.95,
@@ -257,10 +270,9 @@ export class Car {
       o.castShadow = true;
       const swap = (m) => {
         if (!m) return m;
-        if (m.name === 'gallardo_paint' || m.name === 'gallardo_paint.001') return paintMat;
-        // tail lights glow red so the rear reads at night (brake state is
-        // still driven through the dummy brakeMat, like the F40 before it)
-        if (m.name.includes('taillight') && m.isMeshStandardMaterial) { m.emissive = new THREE.Color(0xff1a05); m.emissiveIntensity = 1.5; }
+        if (m.name === 'sennapaintmain' || m.name === 'sennapaint') return paintMat;
+        if (m.name.includes('taillight') && m.isMeshStandardMaterial) { m.emissive = new THREE.Color(0xff1a05); m.emissiveIntensity = 1.6; }
+        if (m.name.includes('headlight') && m.isMeshStandardMaterial) { m.emissive = new THREE.Color(0xffe9bb); m.emissiveIntensity = 0.7; }
         return m;
       };
       o.material = Array.isArray(o.material) ? o.material.map(swap) : swap(o.material);
@@ -271,43 +283,42 @@ export class Car {
     this.bodyG.add(wrap);
     this.frontWheels = []; this.spinWheels = [];
     this.brakeMat = mat(0x881111, { emissive: 0xff2211, emissiveIntensity: 0.8 }); // dummy: tail lights live in the model
-    this._wheelRadius = 0.56;
 
-    // Contact shadow: the city floor is a reflector (no shadow receiving),
-    // so a soft blob grounds the car the way his avatar is grounded.
+    // Baked body-space bounds (drives the wheel zones + light positions).
+    this.bodyG.updateWorldMatrix(true, true);
+    const toBody = new THREE.Matrix4().copy(this.bodyG.matrixWorld).invert();
+    const bbox = new THREE.Box3().setFromObject(wrap);
+    const bSize = bbox.getSize(new THREE.Vector3()); // ~ (4.7, 2.8, 10.2)
+    const halfW = bSize.x / 2, halfL = bSize.z / 2;
+    this._wheelRadius = 0.74;
+
+    // Contact shadow (the reflector floor receives no shadows).
     if (!this._blob) {
       const c = document.createElement('canvas'); c.width = c.height = 128;
       const g = c.getContext('2d');
       const grad = g.createRadialGradient(64, 64, 4, 64, 64, 62);
       grad.addColorStop(0, 'rgba(0,0,0,0.62)'); grad.addColorStop(0.7, 'rgba(0,0,0,0.34)'); grad.addColorStop(1, 'rgba(0,0,0,0)');
       g.fillStyle = grad; g.fillRect(0, 0, 128, 128);
-      this._blob = new THREE.Mesh(new THREE.PlaneGeometry(5.1, 8.2),
+      this._blob = new THREE.Mesh(new THREE.PlaneGeometry(7.0, 11.0),
         new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false }));
       this._blob.rotation.x = -Math.PI / 2; this._blob.position.y = 0.03; this._blob.renderOrder = 1;
       this.group.add(this._blob);
     }
 
-    // Wheels: the model splits each wheel into material fragments (rims,
-    // brake discs, calipers) across many meshes. Cluster the fragments by
-    // corner in body space and lift each cluster into a steer/spin pivot —
-    // the same trick as the F40, adapted to fragments instead of whole
-    // wheel meshes.
-    this.bodyG.updateWorldMatrix(true, true);
-    const toBody = new THREE.Matrix4().copy(this.bodyG.matrixWorld).invert();
+    // Wheels: cluster the fragments (rims/discs/calipers/paint shards) by
+    // corner in body space into steer/spin pivots — the F40/Lambo trick.
     const parts = [];
     wrap.traverse((o) => {
       if (!o.isMesh) return;
       const geo = o.geometry.clone().applyMatrix4(new THREE.Matrix4().multiplyMatrices(toBody, o.matrixWorld));
       geo.computeBoundingBox();
       const bb = geo.boundingBox;
-      const c = bb.getCenter(new THREE.Vector3());
-      const s = bb.getSize(new THREE.Vector3());
-      parts.push({ mesh: o, geo, c, s, name: o.name || '' });
+      parts.push({ mesh: o, geo, c: bb.getCenter(new THREE.Vector3()), s: bb.getSize(new THREE.Vector3()), name: o.name || '' });
     });
-    const inWheelZone = (p) => Math.abs(p.c.x) > 0.88 && Math.abs(p.c.x) < 1.61
-      && p.c.y > 0.10 && p.c.y < 0.98 && Math.abs(p.c.z) > 1.26 && Math.abs(p.c.z) < 2.41;
-    const isWheelPart = (p) => /wheel|amdb11|brake|caliper/i.test(p.name) && inWheelZone(p);
-    const notBody = (p) => !/fender|body|bumper|door|skirt|spoiler|hood|mirror/i.test(p.name);
+    const inWheelZone = (p) => Math.abs(p.c.x) > halfW * 0.45 && Math.abs(p.c.x) < halfW * 1.05
+      && p.c.y > 0.1 && p.c.y < bSize.y * 0.6 && Math.abs(p.c.z) > halfL * 0.45 && Math.abs(p.c.z) < halfL * 0.9;
+    const notBody = (p) => !/fender|body|bumper|door|skirt|spoiler|hood|mirror|wheelhouse|seat/i.test(p.name);
+    const isWheelPart = (p) => /wheel|amdb11|brake|caliper/i.test(p.name) && notBody(p) && inWheelZone(p);
     const clusters = new Map();
     for (const p of parts.filter(isWheelPart)) {
       const key = `${Math.sign(p.c.x)},${Math.sign(p.c.z)}`;
@@ -326,13 +337,13 @@ export class Car {
         p.taken = true;
       };
       members.forEach(take);
-      // any other fragment sitting at the same centre rides along
-      for (const p of parts) if (!p.taken && p.mesh.parent && notBody(p) && p.c.distanceTo(ctr) < 0.52) take(p);
+      for (const p of parts) if (!p.taken && p.mesh.parent && notBody(p) && p.c.distanceTo(ctr) < 0.85) take(p);
       this.spinWheels.push(spin);
       if (ctr.z < 0) this.frontWheels.push(pivot); // body-space front is -Z
     }
 
-    // Keep real headlights (quality toggle in main.js uses headlightSpots).
+    // Headlights: real spots + glow sprites at the measured lamp ends
+    // (baked headlights (+-1.8, ~1.4, -4.5); tail bar (~+-1.2, ~1.7, +4.5)).
     this.headlightSpots = [];
     const glowTexture = (rgb) => {
       const c = document.createElement('canvas'); c.width = c.height = 128;
@@ -345,19 +356,19 @@ export class Car {
     const headGlowTex = glowTexture('255,215,150');
     const tailGlowTex = glowTexture('255,45,25');
     for (const s of [-1, 1]) {
-      const spot = new THREE.SpotLight(0xffe2b0, 175, 52, 0.5, 0.55, 1.15);
-      spot.position.set(s * 0.98, 0.90, -2.79);
-      spot.target.position.set(s * 1.40, 0.04, -18);
+      const spot = new THREE.SpotLight(0xffe2b0, 175, 60, 0.5, 0.55, 1.15);
+      spot.position.set(s * 1.7, 1.3, -4.55);
+      spot.target.position.set(s * 2.2, 0, -20);
       this.bodyG.add(spot); this.bodyG.add(spot.target);
       this.headlightSpots.push(spot);
       const headGlow = new THREE.Sprite(new THREE.SpriteMaterial({
         map: headGlowTex, transparent: true, opacity: 0.3, depthWrite: false, blending: THREE.AdditiveBlending,
       }));
-      headGlow.scale.setScalar(0.95); headGlow.position.set(s * 0.98, 0.84, -2.83); this.bodyG.add(headGlow);
+      headGlow.scale.setScalar(1.25); headGlow.position.set(s * 1.81, 1.35, -4.5); this.bodyG.add(headGlow);
       const tailGlow = new THREE.Sprite(new THREE.SpriteMaterial({
         map: tailGlowTex, transparent: true, opacity: 0.45, depthWrite: false, blending: THREE.AdditiveBlending,
       }));
-      tailGlow.scale.set(0.95, 0.56, 1); tailGlow.position.set(s * 0.88, 1.15, 2.72); this.bodyG.add(tailGlow);
+      tailGlow.scale.set(1.3, 0.7, 1); tailGlow.position.set(s * 1.2, 1.72, 4.5); this.bodyG.add(tailGlow);
     }
     this.modelLoaded = true;
   }
