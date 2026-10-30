@@ -21,10 +21,10 @@ import layoutData from '../../ninja-kit/layout.json';
 export const ORANGE = 0xff5a00;
 export const BLACK = 0x121212;
 export const WORLD_SIZE = 1700; // city extent for the minimap / fallback clamp
-// Shared sun direction (Sky + PMREM environment in main.js): a low dusk sun
-// so the one PBR object in the scene — the car — has a consistent sky to
-// reflect. The kit itself is unlit and ignores it.
-export const SUN_DIR = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.degToRad(90 - 4), THREE.MathUtils.degToRad(132));
+// Shared sun direction (Sky + PMREM environment in main.js): a morning sun
+// (~22° up) so the one PBR object in the scene — the car — has a consistent
+// sky to reflect. The kit itself is unlit and ignores it.
+export const SUN_DIR = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.degToRad(90 - 22), THREE.MathUtils.degToRad(125));
 
 // Discovery points for the HUD (title/body shown on arrival, minimap dots).
 // Positions sit on open floor next to kit landmarks.
@@ -45,18 +45,24 @@ export function buildWorld(scene, physics) {
   const phys = physics; // may be null in degraded mode (visuals still build)
   const regBox = (x, y, z, hx, hy, hz) => { if (phys) phys.addFixedBox({ x, y, z, hx, hy, hz }); };
 
-  // --- atmosphere: pure black void + range fog ---
-  // No sky dome: his backdrop is blackness itself (main.js still builds the
-  // car its PMREM environment from a private Sky — reflections keep their
-  // light story, the visible world stays void).
-  scene.background = new THREE.Color(0x010203);
-  // His fog story: the void swallows the city edges (his IDLE fog far ~800).
-  scene.fog = new THREE.Fog(0x030509, 60, 780);
-  scene.add(new THREE.HemisphereLight(0x243447, 0x05070a, 0.5));
-  const sun = new THREE.DirectionalLight(0x8fb6d9, 0.9); // moonlight for the car
-  sun.position.set(-70, 120, -90); sun.castShadow = true;
+  // --- atmosphere: MORNING (Dinesh's call over the ninja night) ---
+  // A real morning sky dome, warm low sun, pale haze on the horizon. The
+  // kit's unlit textures read exactly as authored; the haze + daylight do
+  // the atmosphere work the black void did at night.
+  scene.background = new THREE.Color(0xaebfd2);
+  const sky = new Sky();
+  sky.scale.setScalar(6000);
+  const skyU = sky.material.uniforms;
+  skyU.turbidity.value = 5; skyU.rayleigh.value = 1.6;
+  skyU.mieCoefficient.value = 0.004; skyU.mieDirectionalG.value = 0.8;
+  skyU.sunPosition.value.copy(SUN_DIR);
+  scene.add(sky);
+  scene.fog = new THREE.Fog(0xaebfd2, 70, 950);
+  scene.add(new THREE.HemisphereLight(0xbcd4ea, 0x44484d, 0.85));
+  const sun = new THREE.DirectionalLight(0xffdfae, 1.7); // morning sun, for the car
+  sun.position.copy(SUN_DIR).multiplyScalar(260); sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
-  Object.assign(sun.shadow.camera, { left: -170, right: 170, top: 170, bottom: -170, far: 480 });
+  Object.assign(sun.shadow.camera, { left: -170, right: 170, top: 170, bottom: -170, far: 700 });
   sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.03;
   scene.add(sun);
 
@@ -107,10 +113,10 @@ export function buildWorld(scene, physics) {
         vec3 vDir = normalize(cameraPosition - vWorld);
         float fres = pow(1.0 - abs(vDir.y), 1.5);
         strength *= 0.35 + fres * 1.15;
-        vec3 col = reflection * color * strength + vec3(0.002, 0.003, 0.006);
+        vec3 col = reflection * color * strength + vec3(0.030, 0.034, 0.040);
         float dist = distance(cameraPosition, vWorld);
-        float fogF = smoothstep(60.0, 780.0, dist);
-        col = mix(col, vec3(0.0015, 0.0025, 0.005), fogF);
+        float fogF = smoothstep(70.0, 950.0, dist);
+        col = mix(col, vec3(0.408, 0.510, 0.643), fogF);
         gl_FragColor = vec4(col, 1.0);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
@@ -120,36 +126,15 @@ export function buildWorld(scene, physics) {
     clipBias: 0.003,
     textureWidth: 1024,
     textureHeight: 1024,
-    color: 0x8fa0b0,
+    color: 0xaebbc8,
     shader: wetShader,
     multisample: 0,
   });
   reflector.material.uniforms.tMask.value = floorTex;
   reflector.rotation.x = -Math.PI / 2; reflector.position.y = 0.0; world.add(reflector);
   const backstop = new THREE.Mesh(new THREE.PlaneGeometry(7000, 7000),
-    new THREE.MeshBasicMaterial({ color: 0x010204 }));
+    new THREE.MeshBasicMaterial({ color: 0x3a4046 }));
   backstop.rotation.x = -Math.PI / 2; backstop.position.y = -0.08; world.add(backstop);
-
-  // --- night sky: starfield + moon (kept from V6 — small, distant, his vibe) ---
-  const hash = (x, y) => { const v = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return v - Math.floor(v); };
-  { const starGeo = new THREE.BufferGeometry();
-    const starPos = new Float32Array(900 * 3);
-    for (let i = 0; i < 900; i++) {
-      const az = hash(i, 11) * Math.PI * 2;
-      const y = 0.1 + hash(i, 23) * 0.9;
-      const rxz = Math.sqrt(Math.max(0, 1 - y * y));
-      starPos[i * 3] = Math.cos(az) * rxz * 2600;
-      starPos[i * 3 + 1] = y * 2600;
-      starPos[i * 3 + 2] = Math.sin(az) * rxz * 2600;
-    }
-    starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
-    const skyStars = new THREE.Points(starGeo, new THREE.PointsMaterial({
-      color: 0xcfe4f5, size: 7, sizeAttenuation: true, transparent: true, opacity: 0.8, fog: false, depthWrite: false,
-    }));
-    skyStars.frustumCulled = false; world.add(skyStars);
-    const moon = new THREE.Mesh(new THREE.CircleGeometry(72, 40), new THREE.MeshBasicMaterial({ fog: false }));
-    moon.material.color.setRGB(1.35, 1.48, 1.62);
-    moon.position.set(-980, 720, -1880); moon.lookAt(0, 0, 0); world.add(moon); }
 
   // Invisible bounds, far beyond the fog — the car stays in the world.
   regBox(0, 6, -1150, 1150, 6, 2); regBox(0, 6, 1150, 1150, 6, 2);

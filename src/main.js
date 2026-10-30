@@ -89,7 +89,7 @@ async function boot() {
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.0;
+  renderer.toneMappingExposure = 0.92; // morning: tame the sky blowout a touch
   container.appendChild(renderer.domElement);
 
   // Image-based lighting generated from the SAME sky the player sees (the
@@ -100,14 +100,14 @@ async function boot() {
   const envScene = new THREE.Scene();
   const envSky = new Sky();
   envSky.scale.setScalar(100);
-  envSky.material.uniforms.turbidity.value = 8;
-  envSky.material.uniforms.rayleigh.value = 2.8;
-  envSky.material.uniforms.mieCoefficient.value = 0.006;
-  envSky.material.uniforms.mieDirectionalG.value = 0.85;
+  envSky.material.uniforms.turbidity.value = 5;
+  envSky.material.uniforms.rayleigh.value = 1.6;
+  envSky.material.uniforms.mieCoefficient.value = 0.004;
+  envSky.material.uniforms.mieDirectionalG.value = 0.8;
   envSky.material.uniforms.sunPosition.value.copy(SUN_DIR);
   envScene.add(envSky);
   scene.environment = pmrem.fromScene(envScene, 0.04).texture;
-  scene.environmentIntensity = 0.3;
+  scene.environmentIntensity = 0.55;
 
   // --- post chain (3d-ninja recipe, WebGL form) ---
   // RenderPass (linear HDR) -> UnrealBloom fed only by authored emissive
