@@ -245,7 +245,7 @@ async function boot() {
 
     // game feel: dust for drift / landing / impacts
     if (car.drifting) {
-      const back = 1.6;
+      const back = 20; // drift dust at the rear of a 50-long car
       dust.spawn(car.pos.x + Math.sin(car.heading) * back, 0.25, car.pos.z + Math.cos(car.heading) * back, 3, 1.8, 1.2);
     }
     if (car.consumeLanding()) dust.spawn(car.pos.x, 0.3, car.pos.z, 18, 3.2, 1.4);
@@ -257,7 +257,7 @@ async function boot() {
     if (hud.started) audio.update(car.speedRatio, car.drifting);
 
     // chase camera + FOV kick with speed
-    const targetFov = 58 + car.speedRatio * 11;
+    const targetFov = 58 + car.speedRatio * 16; // bigger kick: speed must READ at size 50
     if (Math.abs(targetFov - fov) > 0.05) { fov += (targetFov - fov) * Math.min(1, dt * 4); camera.fov = fov; camera.updateProjectionMatrix(); }
     const backYaw = car.heading + orbitYaw;
     desired.set(

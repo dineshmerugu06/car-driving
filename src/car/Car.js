@@ -20,7 +20,7 @@ const KEYMAP = {
 
 const SPAWN = { x: 0, z: 0 }; // city centre: 59 clearance — the only pocket a size-50 car fits // the dense pocket: ramps, tower and walls ahead
 const SPAWN_Y = 0.15; // small drop-in on spawn/reset
-const MAX_FWD = 30, MAX_REV = -11; // 30 u/s = 108 km/h on the speedo
+const MAX_FWD = 85, MAX_REV = -28; // retuned for size 50 (was 30/-11 from the 3.9-long V1 car: 0.6 lengths/s, felt dead)
 
 export class Car {
   constructor(scene, physics, audio) {
@@ -70,7 +70,7 @@ export class Car {
     // origin is the mesh origin at ground level — so the body rests at y=0.
     // Sized for the F40 at size 50 (50 long — see applyModel).
     this.collider = P.world.createCollider(
-      RAPIER.ColliderDesc.cuboid(8.4, 3.2, 23.5).setTranslation(0, 3.2, 0)
+      RAPIER.ColliderDesc.cuboid(7.8, 3.0, 22.0).setTranslation(0, 3.0, 0) // shrunk ~12% under the visual: street margin, less grind
         .setDensity(2.2).setFriction(0.25).setRestitution(0.05)
         .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS),
       this.body);
@@ -116,8 +116,8 @@ export class Car {
     const speedFactor = 1 / (1 + Math.abs(this.speed) * 0.06);
 
     // longitudinal speed state (V1 tuning — it felt right, response is instant)
-    if (input.accel) this.speed += 24 * h * (this.speed < 0 ? 2.4 : 1); // punchy: ~0-80 km/h in ~1.5 s
-    if (input.brake) this.speed -= (this.speed > 0.5 ? 30 : 10) * h;
+    if (input.accel) this.speed += 55 * h * (this.speed < 0 ? 2.4 : 1); // size-50 punch: 0-306 km/h in ~2.5 s
+    if (input.brake) this.speed -= (this.speed > 0.5 ? 75 : 28) * h;
     this.speed -= this.speed * (input.handbrake ? 2.6 : 0.5) * h;
     if (!input.accel && !input.brake) this.speed -= this.speed * 0.3 * h;
     this.speed = THREE.MathUtils.clamp(this.speed, MAX_REV, MAX_FWD);
@@ -142,7 +142,7 @@ export class Car {
         if (len > 0.001) { fx /= len; fy /= len; fz /= len; } else { fx = f.x; fy = 0; fz = f.z; }
       }
       let vy = fy * this.speed;
-      if (this.jumpQueued) { vy = 9.5; this.jumpQueued = false; }
+      if (this.jumpQueued) { vy = 17; this.jumpQueued = false; }
       this.body.setLinvel({ x: fx * this.speed, y: vy, z: fz * this.speed }, true);
     } else {
       this.jumpQueued = false;
@@ -156,8 +156,8 @@ export class Car {
     const steerTarget = (input.left ? 1 : 0) - (input.right ? 1 : 0);
     this.steer += (steerTarget * 0.55 - this.steer) * Math.min(1, dt * 10);
     const speedFactor = 1 / (1 + Math.abs(this.speed) * 0.06);
-    if (input.accel) this.speed += 24 * dt * (this.speed < 0 ? 2.4 : 1);
-    if (input.brake) this.speed -= (this.speed > 0.5 ? 30 : 10) * dt;
+    if (input.accel) this.speed += 55 * dt * (this.speed < 0 ? 2.4 : 1);
+    if (input.brake) this.speed -= (this.speed > 0.5 ? 75 : 28) * dt;
     this.speed -= this.speed * (input.handbrake ? 2.6 : 0.5) * dt;
     if (!input.accel && !input.brake) this.speed -= this.speed * 0.3 * dt;
     this.speed = THREE.MathUtils.clamp(this.speed, MAX_REV, MAX_FWD);
@@ -167,7 +167,7 @@ export class Car {
     const f = this.forward(this._fwd);
     this.pos.x += f.x * this.speed * dt;
     this.pos.z += f.z * this.speed * dt;
-    if (this.jumpQueued && this.y === 0) { this.vy = 8.5; this.jumpQueued = false; }
+    if (this.jumpQueued && this.y === 0) { this.vy = 16; this.jumpQueued = false; }
     if (this.y > 0 || this.vy !== 0) { this.vy -= 22 * dt; this.y += this.vy * dt; if (this.y <= 0) { this.y = 0; this.vy = 0; this.landedFlag = true; } }
     const lim = WORLD_SIZE / 2 - 4;
     this.pos.x = THREE.MathUtils.clamp(this.pos.x, -lim, lim);
