@@ -1,7 +1,8 @@
-// World.js — V8 MERIDIAN. Our own world, built from zero (Dinesh: "total
-// world rebuild — ur wish — main thing: no pixel"). The samsy kit is gone.
-// An original coastal morning city on an island: a road grid, a hero tower
-// carrying his screens, a lighthouse point, water on every side.
+// World.js — V9 MERIDIAN REAL. Same city as V8, rebuilt materials:
+// Dinesh asked for a REALISTIC graphic world — so every surface is now a
+// photographic PBR scan (CC0: Poly Haven + ambientCG) with normal maps,
+// lit by a real photographic morning HDRI (Poly Haven) instead of a
+// shader sky. Canvas-drawn surfaces are gone.
 //
 // The anti-pixel rules (his one hard requirement):
 //   - textures are generated at full resolution and sampled with the
@@ -13,7 +14,7 @@
 //   - geometry is real geometry at every distance — nothing is a
 //     low-res billboard pretending to be a building.
 import * as THREE from 'three';
-import { Sky } from 'three/addons/objects/Sky.js';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 
 export const ORANGE = 0xff5a00;
 export const BLACK = 0x121212;
@@ -40,23 +41,28 @@ function mulberry32(a) {
   };
 }
 
-export function buildWorld(scene, physics) {
+export function buildWorld(scene, physics, renderer) {
   const phys = physics;
   const regBox = (x, y, z, hx, hy, hz) => { if (phys) phys.addFixedBox({ x, y, z, hx, hy, hz }); };
   const maxAniso = 16; // WebGL clamps to the device's real max
 
-  // --- atmosphere: the V7 morning, kept ---
+  // --- atmosphere: a REAL morning sky (photographic HDRI) ---
+  // The HDRI is both the visible sky and the light: scene.environment is
+  // its PMREM, so every PBR surface reflects and shades from the same
+  // real sky the player sees. A warm directional keeps real shadows.
   scene.background = new THREE.Color(0xaebfd2);
-  const sky = new Sky();
-  sky.scale.setScalar(6000);
-  const skyU = sky.material.uniforms;
-  skyU.turbidity.value = 5; skyU.rayleigh.value = 1.6;
-  skyU.mieCoefficient.value = 0.004; skyU.mieDirectionalG.value = 0.8;
-  skyU.sunPosition.value.copy(SUN_DIR);
-  scene.add(sky);
-  scene.fog = new THREE.Fog(0xaebfd2, 90, 1800);
-  scene.add(new THREE.HemisphereLight(0xbcd4ea, 0x4a4d4a, 0.85));
-  const sun = new THREE.DirectionalLight(0xffdfae, 1.7);
+  new RGBELoader().load(new URL('assets/sky/morning.hdr', document.baseURI).href, (hdr) => {
+    hdr.mapping = THREE.EquirectangularReflectionMapping;
+    scene.background = hdr;
+    if (renderer) {
+      const pmrem = new THREE.PMREMGenerator(renderer);
+      scene.environment = pmrem.fromEquirectangular(hdr).texture;
+      scene.environmentIntensity = 0.65;
+    }
+  });
+  scene.fog = new THREE.Fog(0xb8c9d6, 230, 2200);
+  scene.add(new THREE.HemisphereLight(0xbcd4ea, 0x4a4d4a, 0.5));
+  const sun = new THREE.DirectionalLight(0xffdfae, 1.6);
   sun.position.copy(SUN_DIR).multiplyScalar(260); sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
   Object.assign(sun.shadow.camera, { left: -170, right: 170, top: 170, bottom: -170, far: 700 });
@@ -66,7 +72,49 @@ export function buildWorld(scene, physics) {
   const world = new THREE.Group(); scene.add(world);
   const rand = mulberry32(20261031);
 
-  // --- procedural textures, drawn once at full res ---
+  // --- photographic PBR sets (CC0 scans, full res, max anisotropy) ---
+  const texLoader = new THREE.TextureLoader();
+  const loadTex = (path, srgb) => {
+    const t = texLoader.load(new URL(path, document.baseURI).href);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.anisotropy = maxAniso;
+    if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  };
+  const loadSet = (dir, withRough) => ({
+    map: loadTex(`assets/pbr/${dir}/map.jpg`, true),
+    normal: loadTex(`assets/pbr/${dir}/normal.jpg`, false),
+    rough: withRough ? loadTex(`assets/pbr/${dir}/rough.jpg`, false) : null,
+  });
+  const cloneSet = (set, rx, ry) => {
+    const c = (t) => { if (!t) return null; const x = t.clone(); x.needsUpdate = true; x.repeat.set(rx, ry); return x; };
+    return { map: c(set.map), normalMap: c(set.normal), roughnessMap: c(set.rough) };
+  };
+  const roofMat = new THREE.MeshStandardMaterial({ color: 0x3c4145, roughness: 0.95 });
+  const boxGeo = new THREE.BoxGeometry(1, 1, 1);
+  const asphaltSet = loadSet('asphalt', false);
+  const sidewalkSet = loadSet('sidewalk', false);
+  const FACADE_SETS = [loadSet('facade1', true), loadSet('facade2', true), loadSet('facade3', true), loadSet('facade4', true)];
+  const facadeCache = new Map();
+  const facadeMat = (idx, w, h) => {
+    // repeats quantized + cached: windows stay one size on every tower
+    const rx = Math.max(1, Math.round(w / 30)), ry = Math.max(1, Math.round(h / 30));
+    const key = idx + ':' + rx + ':' + ry;
+    if (!facadeCache.has(key)) {
+      const maps = cloneSet(FACADE_SETS[idx], rx, ry);
+      const m = new THREE.MeshStandardMaterial({ ...maps, roughness: 1.0, metalness: 0.04 });
+      m.normalScale = new THREE.Vector2(0.75, 0.75);
+      facadeCache.set(key, m);
+    }
+    return facadeCache.get(key);
+  };
+  const speckle = (g, w, h, n, alpha) => {
+    for (let i = 0; i < n; i++) {
+      const v = 118 + rand() * 60;
+      g.fillStyle = `rgba(${v},${v},${v + 6},${alpha})`;
+      g.fillRect(rand() * w, rand() * h, 2, 2);
+    }
+  };
   const canvasTex = (w, h, draw, rx = 1, ry = 1) => {
     const c = document.createElement('canvas'); c.width = w; c.height = h;
     draw(c.getContext('2d'), w, h);
@@ -77,73 +125,31 @@ export function buildWorld(scene, physics) {
     t.colorSpace = THREE.SRGBColorSpace;
     return t;
   };
-  const speckle = (g, w, h, n, alpha) => {
-    for (let i = 0; i < n; i++) {
-      const v = 118 + rand() * 60;
-      g.fillStyle = `rgba(${v},${v},${v + 6},${alpha})`;
-      g.fillRect(rand() * w, rand() * h, 2, 2);
-    }
-  };
-  const groundTex = canvasTex(512, 512, (g, w, h) => {
-    g.fillStyle = '#585d60'; g.fillRect(0, 0, w, h); speckle(g, w, h, 2600, 0.16);
-  }, 260, 260);
-  const plazaTex = canvasTex(512, 512, (g, w, h) => {
-    g.fillStyle = '#9aa0a2'; g.fillRect(0, 0, w, h); speckle(g, w, h, 1500, 0.10);
-    g.strokeStyle = 'rgba(40,44,48,0.55)'; g.lineWidth = 3;
-    for (let i = 0; i <= 4; i++) {
-      g.beginPath(); g.moveTo((w / 4) * i, 0); g.lineTo((w / 4) * i, h); g.stroke();
-      g.beginPath(); g.moveTo(0, (h / 4) * i); g.lineTo(w, (h / 4) * i); g.stroke();
-    }
-  }, 10, 10);
-  // Road strip texture: edges + centre dashes run along V.
-  const roadTex = canvasTex(256, 256, (g, w, h) => {
-    g.fillStyle = '#2f3337'; g.fillRect(0, 0, w, h); speckle(g, w, h, 1200, 0.13);
-    g.fillStyle = '#e8e4da';
+  // Painted road markings ONLY (transparent) laid over the real asphalt.
+  const markTex = canvasTex(256, 256, (g, w, h) => {
+    g.clearRect(0, 0, w, h);
+    g.fillStyle = 'rgba(232,228,218,0.92)';
     g.fillRect(6, 0, 5, h); g.fillRect(w - 11, 0, 5, h);
     g.fillRect(w / 2 - 4, 18, 8, 96);
   });
-  const roadMat = (len) => {
-    const t = roadTex.clone(); t.needsUpdate = true; t.repeat.set(1, Math.max(1, Math.round(len / 46)));
-    t.anisotropy = maxAniso;
-    return new THREE.MeshStandardMaterial({ map: t, roughness: 0.94, metalness: 0 });
+  const roadPair = (len) => {
+    const rep = Math.max(1, Math.round(len / 22));
+    const a = new THREE.MeshStandardMaterial({ ...cloneSet(asphaltSet, 1, rep), roughness: 0.96, metalness: 0 });
+    a.color.setScalar(0.78); // worn asphalt reads pale under the HDRI — deepen it
+    const mt = markTex.clone(); mt.needsUpdate = true; mt.repeat.set(1, Math.max(1, Math.round(len / 46)));
+    const b = new THREE.MeshStandardMaterial({ map: mt, transparent: true, roughness: 0.85, depthWrite: false });
+    return [a, b];
   };
-
-  // Facade variants: colour canvas + emissive windows canvas (lit windows
-  // feed the bloom threshold like lit signage; most windows stay glassy).
-  const FACADE_BASES = ['#c9d1d5', '#b4c0c6', '#d6cdbd', '#a9bab2'];
-  const facadeMats = FACADE_BASES.map((base) => {
-    const lit = [];
-    const map = canvasTex(512, 1024, (g, w, h) => {
-      g.fillStyle = base; g.fillRect(0, 0, w, h); speckle(g, w, h, 700, 0.05);
-      const cols = 8, rows = 16, cw = w / cols, ch = h / rows;
-      for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) {
-        const isLit = rand() < 0.14; if (isLit) lit.push([x, y]);
-        g.fillStyle = isLit ? '#ffd9a0' : (rand() < 0.5 ? '#5d7684' : '#718b99');
-        g.fillRect(x * cw + 7, y * ch + 9, cw - 14, ch - 18);
-      }
-    });
-    const emissiveMap = canvasTex(512, 1024, (g, w, h) => {
-      g.fillStyle = '#000'; g.fillRect(0, 0, w, h);
-      const cols = 8, rows = 16, cw = w / cols, ch = h / rows;
-      g.fillStyle = '#ffca7a';
-      for (const [x, y] of lit) g.fillRect(x * cw + 7, y * ch + 9, cw - 14, ch - 18);
-    });
-    return new THREE.MeshStandardMaterial({
-      map, emissiveMap, emissive: 0xffb85e, emissiveIntensity: 0.85, roughness: 0.62, metalness: 0.08,
-    });
-  });
-  const roofMat = new THREE.MeshStandardMaterial({ color: 0x3c4145, roughness: 0.95 });
-  const boxGeo = new THREE.BoxGeometry(1, 1, 1);
 
   // --- island + sea ---
   const island = new THREE.Mesh(new THREE.BoxGeometry(1500, 6, 1500),
-    new THREE.MeshStandardMaterial({ map: groundTex, roughness: 0.97 }));
+    new THREE.MeshStandardMaterial({ ...cloneSet(sidewalkSet, 90, 90), roughness: 0.95 }));
   island.position.y = -3.02; island.receiveShadow = true; world.add(island);
   const rim = new THREE.Mesh(new THREE.BoxGeometry(1560, 2.4, 1560),
     new THREE.MeshStandardMaterial({ color: 0x8f979c, roughness: 0.9 }));
   rim.position.y = -1.6; world.add(rim);
   const sea = new THREE.Mesh(new THREE.PlaneGeometry(7000, 7000),
-    new THREE.MeshStandardMaterial({ color: 0x2e6b8f, roughness: 0.14, metalness: 0.05, envMapIntensity: 1.25 }));
+    new THREE.MeshStandardMaterial({ color: 0x2a5d7d, roughness: 0.08, metalness: 0.05, envMapIntensity: 1.4 }));
   sea.rotation.x = -Math.PI / 2; sea.position.y = -0.9; world.add(sea);
   // perimeter: keep the car on the island
   regBox(0, 6, -745, 745, 6, 2); regBox(0, 6, 745, 745, 6, 2);
@@ -151,9 +157,12 @@ export function buildWorld(scene, physics) {
 
   // --- roads ---
   const road = (cx, cz, wdt, len, alongZ, y) => {
-    const m = new THREE.Mesh(new THREE.PlaneGeometry(wdt, len), roadMat(len));
+    const [a, b] = roadPair(len);
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(wdt, len), a);
     m.rotation.x = -Math.PI / 2; if (!alongZ) m.rotation.z = Math.PI / 2;
     m.position.set(cx, y, cz); m.receiveShadow = true; world.add(m);
+    const mk = new THREE.Mesh(new THREE.PlaneGeometry(wdt, len), b);
+    mk.rotation.copy(m.rotation); mk.position.set(cx, y + 0.015, cz); mk.renderOrder = 2; world.add(mk);
   };
   for (const x of [-480, -240, 0, 240, 480]) road(x, 0, 46, 1330, true, 0.02);
   for (const z of [-480, -240, 0, 240]) road(0, z, 46, 1330, false, 0.04);
@@ -161,7 +170,7 @@ export function buildWorld(scene, physics) {
   road(-648, 0, 40, 1330, true, 0.03); road(648, 0, 40, 1330, true, 0.03);
 
   // --- plaza pads + buildings on the block grid ---
-  const plazaMat = new THREE.MeshStandardMaterial({ map: plazaTex, roughness: 0.92 });
+  const plazaMat = new THREE.MeshStandardMaterial({ ...cloneSet(sidewalkSet, 8, 8), roughness: 0.94 });
   const vLines = [-648, -480, -240, 0, 240, 480, 648];
   const hLines = [-648, -480, -240, 0, 240, 648];
   const cells = [];
@@ -170,7 +179,8 @@ export function buildWorld(scene, physics) {
       x0: vLines[i] + 26, x1: vLines[i + 1] - 26, z0: hLines[j] + 26, z1: hLines[j + 1] - 26,
     });
   }
-  const building = (cx, cz, wdt, dep, hgt, mat) => {
+  const building = (cx, cz, wdt, dep, hgt, matIdx) => {
+    const mat = facadeMat(matIdx, wdt, hgt);
     const mats = [mat, mat, roofMat, roofMat, mat, mat];
     const m = new THREE.Mesh(boxGeo, mats);
     m.scale.set(wdt, hgt, dep); m.position.set(cx, hgt / 2 + 0.3, cz);
@@ -193,7 +203,7 @@ export function buildWorld(scene, physics) {
       const bz = c.z0 + bd / 2 + rand() * Math.max(1, cd - bd);
       const centreBoost = Math.max(0, 1 - Math.hypot(bx, bz) / 800);
       const bh = 34 + rand() * 60 + centreBoost * 85;
-      building(bx, bz, bw, bd, bh, facadeMats[Math.floor(rand() * facadeMats.length)]);
+      building(bx, bz, bw, bd, bh, Math.floor(rand() * 4));
     }
   }
 
@@ -244,11 +254,11 @@ export function buildWorld(scene, physics) {
   };
 
   // --- hero row (north edge, facing spawn): tower + two image towers ---
-  const hero = building(-120, -360, 110, 110, 215, facadeMats[1]);
+  const hero = building(-120, -360, 110, 110, 215, 1);
   panel(-120, 128, -303.5, 118, 48, imgMat('hero-collage.jpg', 2.44));
-  building(-360, -360, 84, 84, 150, facadeMats[0]);
+  building(-360, -360, 84, 84, 150, 0);
   panel(-360, 92, -316.5, 84, 46, imgMat('hero-batman.jpg', 1.83));
-  building(120, -360, 84, 84, 168, facadeMats[2]);
+  building(120, -360, 84, 84, 168, 2);
   panel(120, 100, -316.5, 84, 46, imgMat('deathstroke.jpg', 1.83));
   void hero;
 

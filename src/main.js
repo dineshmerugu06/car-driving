@@ -4,13 +4,12 @@
 // world still renders and the car drives in lite kinematic mode — never a
 // silent black screen (window.__showError surfaces any failure on-page).
 import * as THREE from 'three';
-import { Sky } from 'three/addons/objects/Sky.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { buildWorld, ZONES, SUN_DIR } from './world/World.js';
+import { buildWorld, ZONES } from './world/World.js';
 import { Car, input } from './car/Car.js';
 import { createHud } from './ui/Hud.js';
 import { PhysicsWorld } from './physics/PhysicsWorld.js';
@@ -62,23 +61,6 @@ async function boot() {
   renderer.toneMappingExposure = 0.92; // morning: tame the sky blowout a touch
   container.appendChild(renderer.domElement);
 
-  // Image-based lighting generated from the SAME sky the player sees (the
-  // folio/showroom technique: environment from a real sky, not a studio) —
-  // sky-blue reflections on car paint/glass, warm ground bounce, one
-  // consistent light story across every PBR material.
-  const pmrem = new THREE.PMREMGenerator(renderer);
-  const envScene = new THREE.Scene();
-  const envSky = new Sky();
-  envSky.scale.setScalar(100);
-  envSky.material.uniforms.turbidity.value = 5;
-  envSky.material.uniforms.rayleigh.value = 1.6;
-  envSky.material.uniforms.mieCoefficient.value = 0.004;
-  envSky.material.uniforms.mieDirectionalG.value = 0.8;
-  envSky.material.uniforms.sunPosition.value.copy(SUN_DIR);
-  envScene.add(envSky);
-  scene.environment = pmrem.fromScene(envScene, 0.04).texture;
-  scene.environmentIntensity = 0.55;
-
   // --- post chain (3d-ninja recipe, WebGL form) ---
   // RenderPass (linear HDR) -> UnrealBloom fed only by authored emissive
   // (threshold .82 stands in for his MRT emissive channel: scene surfaces
@@ -104,7 +86,7 @@ async function boot() {
   }
 
   const audio = new AudioEngine();
-  const { floaters, drifters, stars, sun, reflector } = buildWorld(scene, physics);
+  const { floaters, drifters, stars, sun, reflector } = buildWorld(scene, physics, renderer);
   const car = new Car(scene, physics, audio);
   const dust = new Dust(scene);
   floaters.forEach((f) => { f.userData.baseY = f.position.y; });
