@@ -41,7 +41,7 @@ const GradeShader = {
       vec3 col = texture2D(tDiffuse, vUv).rgb;
       float d = distance(vUv, vec2(0.5)) * 1.28;
       float vig = smoothstep(1.05, 0.32, d);
-      col *= mix(0.78, 1.0, vig);
+      col *= mix(0.6, 1.0, vig);
       gl_FragColor = vec4(col, 1.0);
     }`,
 };
@@ -58,7 +58,7 @@ async function boot() {
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 0.92; // morning: tame the sky blowout a touch
+  renderer.toneMappingExposure = 0.95; // PUNK night
   container.appendChild(renderer.domElement);
 
   // --- post chain (3d-ninja recipe, WebGL form) ---
@@ -71,7 +71,7 @@ async function boot() {
   composer.setSize(innerWidth, innerHeight);
   composer.addPass(new RenderPass(scene, camera));
   const bloomPass = new UnrealBloomPass(
-    new THREE.Vector2(innerWidth, innerHeight), 0.34, 0.27 * Math.min(devicePixelRatio, 2), 0.82);
+    new THREE.Vector2(innerWidth, innerHeight), 0.55, 0.27 * Math.min(devicePixelRatio, 2), 0.5);
   composer.addPass(bloomPass);
   const gradePass = new ShaderPass(GradeShader);
   composer.addPass(gradePass);
@@ -86,7 +86,7 @@ async function boot() {
   }
 
   const audio = new AudioEngine();
-  const { floaters, drifters, stars, sun, reflector } = buildWorld(scene, physics, renderer);
+  const { floaters, drifters, stars, sun, reflector, tickers } = buildWorld(scene, physics, renderer);
   const car = new Car(scene, physics, audio);
   const dust = new Dust(scene);
   floaters.forEach((f) => { f.userData.baseY = f.position.y; });
@@ -176,6 +176,7 @@ async function boot() {
     }
 
     // world life
+    if (tickers) for (const t of tickers) t(dt, elapsed, camera.position);
     floaters.forEach((f, i) => { f.position.y = f.userData.baseY + Math.sin(elapsed * 1.3 + i * 2.1) * 0.45; });
     for (const z of ZONES) if (z.ring) { const s = 1 + Math.sin(elapsed * 2.2) * 0.018; z.ring.scale.set(s, s, 1); }
     for (const c of drifters) { c.position.x += dt * 0.8; if (c.position.x > 280) c.position.x = -280; }

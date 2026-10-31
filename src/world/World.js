@@ -22,7 +22,7 @@ export const WORLD_SIZE = 1700;
 export const SUN_DIR = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.degToRad(90 - 22), THREE.MathUtils.degToRad(125));
 
 export const ZONES = [
-  { id: 'start', name: 'START', x: 0, z: 40, r: 45, title: 'START — MERIDIAN', body: 'Our own world, built from zero: a coastal morning city on an island. Hero tower north, lighthouse at the south-east point, the bay on every side. W / \u2191 accelerate \u00b7 S / \u2193 brake & reverse \u00b7 A D steer \u00b7 SPACE handbrake.' },
+  { id: 'start', name: 'START', x: 0, z: 40, r: 45, title: 'START — MERIDIAN', body: 'Our own world, rebuilt as a rainy neon city at night — Punk Drive style. Hero tower north, lighthouse at the south-east point, the bay on every side. W / \u2191 accelerate \u00b7 S / \u2193 brake & reverse \u00b7 A D steer \u00b7 SPACE handbrake.' },
   { id: 'about', name: 'ABOUT', x: -120, z: -285, r: 50, title: 'ABOUT — MERUGU', body: 'Merugu — vibe coder & AI builder from India. He learns by building: setup first, then Explore \u2192 Plan \u2192 Code \u2192 Verify \u2192 Commit.' },
   { id: 'zero', name: 'PROJECT ZERO', x: -360, z: -285, r: 50, title: 'PROJECT ZERO', body: 'Merugu\u2019s personal AI-agent operating protocol: the creator sets the objectives, verify before claiming done, protect data before any outside send, act freely on safe reversible work, confirm before anything consequential.' },
   { id: 'projects', name: 'PROJECTS', x: 120, z: -285, r: 50, title: 'PROJECTS', body: '1) PROJECT ZERO — AI-agent protocol. 2) VIBE CODING MASTERY — Claude Code course journey (SSK Techy). 3) TOP 10 CLAUDE SKILLS STACK — learned & installed. 4) This driveable 3D portfolio — zero_project1.' },
@@ -50,19 +50,20 @@ export function buildWorld(scene, physics, renderer) {
   // The HDRI is both the visible sky and the light: scene.environment is
   // its PMREM, so every PBR surface reflects and shades from the same
   // real sky the player sees. A warm directional keeps real shadows.
-  scene.background = new THREE.Color(0xaebfd2);
+  scene.background = new THREE.Color(0x04060d);
   new RGBELoader().load(new URL('assets/sky/morning.hdr', document.baseURI).href, (hdr) => {
     hdr.mapping = THREE.EquirectangularReflectionMapping;
-    scene.background = hdr;
+    // PUNK: the HDRI is NOT shown — it only lights/reflects, dimmed hard,
+    // the way Punk Drive grades a day sky into a night city.
     if (renderer) {
       const pmrem = new THREE.PMREMGenerator(renderer);
       scene.environment = pmrem.fromEquirectangular(hdr).texture;
-      scene.environmentIntensity = 0.65;
+      scene.environmentIntensity = 0.14;
     }
   });
-  scene.fog = new THREE.Fog(0xb8c9d6, 230, 2200);
-  scene.add(new THREE.HemisphereLight(0xbcd4ea, 0x4a4d4a, 0.5));
-  const sun = new THREE.DirectionalLight(0xffdfae, 1.6);
+  scene.fog = new THREE.Fog(0x05060e, 55, 980);
+  scene.add(new THREE.HemisphereLight(0x33456e, 0x05060a, 0.25));
+  const sun = new THREE.DirectionalLight(0x8fb4ff, 0.3);
   sun.position.copy(SUN_DIR).multiplyScalar(260); sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
   Object.assign(sun.shadow.camera, { left: -170, right: 170, top: 170, bottom: -170, far: 700 });
@@ -103,6 +104,10 @@ export function buildWorld(scene, physics, renderer) {
     if (!facadeCache.has(key)) {
       const maps = cloneSet(FACADE_SETS[idx], rx, ry);
       const m = new THREE.MeshStandardMaterial({ ...maps, roughness: 1.0, metalness: 0.04 });
+      m.color.setScalar(0.34); // night-darkened photo…
+      m.emissiveMap = maps.map; // …whose lit windows glow back (bloom food)
+      m.emissive = new THREE.Color(0x8fb4e8);
+      m.emissiveIntensity = 0.75;
       m.normalScale = new THREE.Vector2(0.75, 0.75);
       facadeCache.set(key, m);
     }
@@ -135,21 +140,23 @@ export function buildWorld(scene, physics, renderer) {
   const roadPair = (len) => {
     const rep = Math.max(1, Math.round(len / 22));
     const a = new THREE.MeshStandardMaterial({ ...cloneSet(asphaltSet, 1, rep), roughness: 0.96, metalness: 0 });
-    a.color.setScalar(0.78); // worn asphalt reads pale under the HDRI — deepen it
+    a.color.setScalar(0.34); a.roughness = 0.3; a.envMapIntensity = 1.7; // PUNK wet street: dark + slick so neon smears across it
     const mt = markTex.clone(); mt.needsUpdate = true; mt.repeat.set(1, Math.max(1, Math.round(len / 46)));
-    const b = new THREE.MeshStandardMaterial({ map: mt, transparent: true, roughness: 0.85, depthWrite: false });
+    const b = new THREE.MeshStandardMaterial({ map: mt, transparent: true, roughness: 0.5, depthWrite: false });
+    b.color.setScalar(0.75);
     return [a, b];
   };
 
   // --- island + sea ---
   const island = new THREE.Mesh(new THREE.BoxGeometry(1500, 6, 1500),
-    new THREE.MeshStandardMaterial({ ...cloneSet(sidewalkSet, 90, 90), roughness: 0.95 }));
+    new THREE.MeshStandardMaterial({ ...cloneSet(sidewalkSet, 90, 90), roughness: 0.7 }));
+  island.material.color.setScalar(0.3); island.material.envMapIntensity = 0.3;
   island.position.y = -3.02; island.receiveShadow = true; world.add(island);
   const rim = new THREE.Mesh(new THREE.BoxGeometry(1560, 2.4, 1560),
-    new THREE.MeshStandardMaterial({ color: 0x8f979c, roughness: 0.9 }));
+    new THREE.MeshStandardMaterial({ color: 0x23272c, roughness: 0.9 }));
   rim.position.y = -1.6; world.add(rim);
   const sea = new THREE.Mesh(new THREE.PlaneGeometry(7000, 7000),
-    new THREE.MeshStandardMaterial({ color: 0x2a5d7d, roughness: 0.08, metalness: 0.05, envMapIntensity: 1.4 }));
+    new THREE.MeshStandardMaterial({ color: 0x0a1622, roughness: 0.05, metalness: 0.05, envMapIntensity: 1.5 }));
   sea.rotation.x = -Math.PI / 2; sea.position.y = -0.9; world.add(sea);
   // perimeter: keep the car on the island
   regBox(0, 6, -745, 745, 6, 2); regBox(0, 6, 745, 745, 6, 2);
@@ -170,7 +177,8 @@ export function buildWorld(scene, physics, renderer) {
   road(-648, 0, 40, 1330, true, 0.03); road(648, 0, 40, 1330, true, 0.03);
 
   // --- plaza pads + buildings on the block grid ---
-  const plazaMat = new THREE.MeshStandardMaterial({ ...cloneSet(sidewalkSet, 8, 8), roughness: 0.94 });
+  const plazaMat = new THREE.MeshStandardMaterial({ ...cloneSet(sidewalkSet, 8, 8), roughness: 0.6 });
+  plazaMat.color.setScalar(0.38); plazaMat.envMapIntensity = 0.35;
   const vLines = [-648, -480, -240, 0, 240, 480, 648];
   const hLines = [-648, -480, -240, 0, 240, 648];
   const cells = [];
@@ -219,14 +227,14 @@ export function buildWorld(scene, physics, renderer) {
   const imgMat = (file, aspect) => {
     const t = coverFit(new THREE.TextureLoader().load(new URL('assets/screens/' + file, document.baseURI).href), aspect);
     t.anisotropy = maxAniso;
-    const m = new THREE.MeshBasicMaterial({ map: t }); m.color.setRGB(1.1, 1.1, 1.1);
+    const m = new THREE.MeshBasicMaterial({ map: t }); m.color.setRGB(1.45, 1.45, 1.45);
     return m;
   };
   const canvasMat = (w, h, draw) => {
     const c = document.createElement('canvas'); c.width = w; c.height = h;
     draw(c.getContext('2d'), w, h);
     const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = maxAniso;
-    const m = new THREE.MeshBasicMaterial({ map: t }); m.color.setRGB(1.1, 1.1, 1.1);
+    const m = new THREE.MeshBasicMaterial({ map: t }); m.color.setRGB(1.45, 1.45, 1.45);
     return m;
   };
   const videoMat = () => {
@@ -237,7 +245,7 @@ export function buildWorld(scene, physics, renderer) {
     const tex = new THREE.VideoTexture(v);
     tex.colorSpace = THREE.SRGBColorSpace;
     v.addEventListener('loadedmetadata', () => coverFit(tex, 1.75, v.videoWidth, v.videoHeight));
-    const m = new THREE.MeshBasicMaterial({ map: tex }); m.color.setRGB(1.1, 1.1, 1.1);
+    const m = new THREE.MeshBasicMaterial({ map: tex }); m.color.setRGB(1.45, 1.45, 1.45);
     return m;
   };
   const frameMat = new THREE.MeshStandardMaterial({ color: 0x22262a, roughness: 0.6, metalness: 0.3 });
@@ -334,22 +342,27 @@ export function buildWorld(scene, physics, renderer) {
   for (const x of [-560, -380, -160, 160, 380, 560]) { treeAt(x, 581); treeAt(x, -581); }
   const lampPostGeo = new THREE.CylinderGeometry(0.5, 0.7, 17, 6);
   const lampHeadGeo = new THREE.SphereGeometry(1.7, 10, 8);
-  const lampHeadMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(1.7, 1.55, 1.15) });
+  const lampHeadMats = [
+    new THREE.MeshBasicMaterial({ color: new THREE.Color(2.8, 0.45, 2.4) }),  // magenta
+    new THREE.MeshBasicMaterial({ color: new THREE.Color(0.45, 2.1, 2.8) }),  // cyan
+    new THREE.MeshBasicMaterial({ color: new THREE.Color(2.4, 1.8, 1.0) }),   // warm
+  ];
+  let lampIdx = 0;
   const lampAt = (x, z) => {
     const p = new THREE.Mesh(lampPostGeo, frameMat); p.position.set(x, 8.5, z); world.add(p);
-    const hd = new THREE.Mesh(lampHeadGeo, lampHeadMat); hd.position.set(x, 17.6, z); world.add(hd);
+    const hd = new THREE.Mesh(lampHeadGeo, lampHeadMats[lampIdx++ % 3]); hd.position.set(x, 17.6, z); world.add(hd);
   };
   for (let z = -520; z <= 520; z += 173) { lampAt(-27, z); lampAt(27, z + 86); }
   for (let x = -520; x <= 520; x += 173) { lampAt(x, -27); lampAt(x + 86, 27); }
 
   // --- zone rings (pulsed by main.js) ---
-  const ringMat = new THREE.MeshBasicMaterial({ color: ORANGE, transparent: true, opacity: 0.85, side: THREE.DoubleSide });
+  const ringMat = new THREE.MeshBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: 0.9, side: THREE.DoubleSide });
   for (const z of ZONES) {
     const ring = new THREE.Mesh(new THREE.RingGeometry(9, 11.5, 40), ringMat);
     ring.rotation.x = -Math.PI / 2; ring.position.set(z.x, 0.35, z.z);
     world.add(ring); z.ring = ring;
     const star = new THREE.Mesh(new THREE.OctahedronGeometry(3.4),
-      new THREE.MeshBasicMaterial({ color: new THREE.Color(2.4, 1.5, 0.35) }));
+      new THREE.MeshBasicMaterial({ color: new THREE.Color(1.9, 2.6, 0.4) }));
     star.position.set(z.x, 6, z.z); world.add(star);
     z.starMesh = star;
   }
@@ -366,12 +379,60 @@ export function buildWorld(scene, physics, renderer) {
   })();
   const drifters = [];
   for (let i = 0; i < 7; i++) {
-    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: cloudTex, transparent: true, opacity: 0.5, depthWrite: false }));
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: cloudTex, transparent: true, opacity: 0.13, depthWrite: false, color: 0x39466a }));
     s.scale.set(280 + rand() * 160, 90 + rand() * 50, 1);
     s.position.set(-260 + rand() * 520, 230 + rand() * 90, -420 + rand() * 840);
     world.add(s); drifters.push(s);
   }
 
+  // --- NEON GATES over the central avenue + street pylons (Punk's
+  // signature: saturated emissive signage feeding the bloom) ---
+  const NEON = [[255, 43, 209], [34, 211, 238], [255, 122, 24], [182, 255, 46], [255, 43, 80]];
+  const neonMats = NEON.map(([r, g, b]) => new THREE.MeshBasicMaterial({ color: new THREE.Color(r / 255 * 1.9, g / 255 * 1.9, b / 255 * 1.9) }));
+  const neonGeo = new THREE.BoxGeometry(1, 1, 1);
+  let neonIdx = 0;
+  const neonPylon = (x, z, hgt) => {
+    const m = new THREE.Mesh(neonGeo, neonMats[neonIdx++ % neonMats.length]);
+    m.scale.set(1.8, hgt, 1.8); m.position.set(x, hgt / 2, z); world.add(m);
+  };
+  for (const z of [-420, -240, -60, 120, 300, 480]) {
+    const hgt = 27 + rand() * 10;
+    neonPylon(-25.4, z, hgt); neonPylon(25.4, z, hgt);
+    const bar = new THREE.Mesh(neonGeo, neonMats[neonIdx++ % neonMats.length]);
+    bar.scale.set(52.6, 2.4, 1.4); bar.position.set(0, hgt + 1.2, z); world.add(bar);
+  }
+  for (const x of [-420, -240, 240, 420]) { neonPylon(x, -25.4, 24 + rand() * 12); neonPylon(x, 25.4, 24 + rand() * 12); }
+
+  // --- RAIN: streak points in a box that follows the camera (Punk's
+  // other signature). Falls fast, wraps, never thins out. ---
+  const rainTexC = document.createElement('canvas'); rainTexC.width = 16; rainTexC.height = 64;
+  const rg = rainTexC.getContext('2d');
+  const rgrad = rg.createLinearGradient(0, 0, 0, 64);
+  rgrad.addColorStop(0, 'rgba(255,255,255,0)'); rgrad.addColorStop(0.5, 'rgba(255,255,255,0.9)'); rgrad.addColorStop(1, 'rgba(255,255,255,0)');
+  rg.fillStyle = rgrad; rg.fillRect(6, 0, 4, 64);
+  const RAIN_N = 1700, RAIN_H = 180;
+  const rainPos = new Float32Array(RAIN_N * 3), rainSpd = new Float32Array(RAIN_N);
+  for (let i = 0; i < RAIN_N; i++) {
+    rainPos[i * 3] = (rand() - 0.5) * 320; rainPos[i * 3 + 1] = rand() * RAIN_H; rainPos[i * 3 + 2] = (rand() - 0.5) * 320;
+    rainSpd[i] = 130 + rand() * 90;
+  }
+  const rainGeo = new THREE.BufferGeometry();
+  rainGeo.setAttribute('position', new THREE.BufferAttribute(rainPos, 3));
+  const rain = new THREE.Points(rainGeo, new THREE.PointsMaterial({
+    size: 4.6, map: new THREE.CanvasTexture(rainTexC), transparent: true, opacity: 0.4,
+    color: 0x9fc4e8, depthWrite: false, sizeAttenuation: true,
+  }));
+  rain.frustumCulled = false; world.add(rain);
+  const tickers = [(dt, elapsed, camPos) => {
+    const p = rainGeo.attributes.position.array;
+    for (let i = 0; i < RAIN_N; i++) {
+      p[i * 3 + 1] -= rainSpd[i] * dt;
+      if (p[i * 3 + 1] < 0) p[i * 3 + 1] += RAIN_H;
+    }
+    rainGeo.attributes.position.needsUpdate = true;
+    rain.position.set(camPos.x, 0, camPos.z);
+  }];
+
   const stars = ZONES.map((z) => ({ taken: false, mesh: z.starMesh, baseY: 6, zone: z }));
-  return { floaters: [], drifters, stars, sun, reflector: null };
+  return { floaters: [], drifters, stars, sun, reflector: null, tickers };
 }

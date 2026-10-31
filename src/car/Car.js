@@ -274,6 +274,16 @@ export class Car {
         new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false }));
       this._blob.rotation.x = -Math.PI / 2; this._blob.position.y = 0.03; this._blob.renderOrder = 1;
       this.group.add(this._blob);
+      // PUNK underglow: a magenta light-pool under the car (bloom does the rest)
+      const gc = document.createElement('canvas'); gc.width = gc.height = 128;
+      const gg = gc.getContext('2d');
+      const ggrad = gg.createRadialGradient(64, 64, 4, 64, 64, 62);
+      ggrad.addColorStop(0, 'rgba(255,43,209,0.85)'); ggrad.addColorStop(0.55, 'rgba(255,43,209,0.38)'); ggrad.addColorStop(1, 'rgba(255,43,209,0)');
+      gg.fillStyle = ggrad; gg.fillRect(0, 0, 128, 128);
+      const glow = new THREE.Mesh(new THREE.PlaneGeometry(40, 64),
+        new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(gc), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+      glow.rotation.x = -Math.PI / 2; glow.position.y = 0.06; glow.renderOrder = 2;
+      this.group.add(glow);
     }
 
     // Wheels: whole wheel meshes (the F40 ships them whole, unlike the

@@ -134,12 +134,12 @@ export function createHud(root, car, callbacks = {}) {
       mm.strokeStyle = '#3a3a3a'; mm.strokeRect(4, 4, 168, 168);
       for (const z of ZONES) {
         mm.beginPath(); mm.arc(toMap(z.x), toMap(z.z), z === found ? 6 : 3.5, 0, 7);
-        mm.fillStyle = z.starMesh && !z.starMesh.visible ? '#7a7a72' : (z === found ? '#ff5a00' : '#e9e9e6');
-        if (z === found) mm.fillStyle = '#ff5a00';
+        mm.fillStyle = z.starMesh && !z.starMesh.visible ? '#7a7a72' : (z === found ? '#ff2bd1' : '#e9e9e6');
+        if (z === found) mm.fillStyle = '#ff2bd1';
         mm.fill();
       }
       const cx = toMap(carRef.pos.x), cy = toMap(carRef.pos.z);
-      mm.beginPath(); mm.arc(cx, cy, 5, 0, 7); mm.fillStyle = '#ff5a00'; mm.fill();
+      mm.beginPath(); mm.arc(cx, cy, 5, 0, 7); mm.fillStyle = '#ff2bd1'; mm.fill();
       mm.strokeStyle = '#ffffff'; mm.beginPath(); mm.moveTo(cx, cy);
       mm.lineTo(cx - Math.sin(carRef.heading) * 10, cy - Math.cos(carRef.heading) * 10); mm.stroke();
     },
