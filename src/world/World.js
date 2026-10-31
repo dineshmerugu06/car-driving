@@ -147,6 +147,68 @@ export function buildWorld(scene, physics) {
     catch (e) { console.warn('Kit build failed', e); if (window.__showError) window.__showError('City kit failed to build: ' + e.message); }
   }, undefined, (err) => { console.warn('Kit failed to load', err); if (window.__showError) window.__showError('City kit failed to load.'); });
 
+  // --- screen content (Dinesh's ask, 2026-10-31): the kit's screens are
+  // unlit textured panels, so the panel shows whatever its map is — a
+  // still image, a VIDEO (VideoTexture), or a live CANVAS (text/data).
+  // Content is assigned per part; every placement of that part shows it.
+  const coverFit = (tex, targetAspect, w, h) => {
+    const ia = (w && h) ? w / h : (tex.image ? tex.image.width / tex.image.height : 1);
+    tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    if (ia > targetAspect) { tex.repeat.set(targetAspect / ia, 1); tex.offset.set((1 - targetAspect / ia) / 2, 0); }
+    else { tex.repeat.set(1, ia / targetAspect); tex.offset.set(0, (1 - ia / targetAspect) / 2); }
+    return tex;
+  };
+  const screenTex = (file, aspect) => coverFit(new THREE.TextureLoader().load(new URL('assets/screens/' + file, document.baseURI).href), aspect);
+  const canvasScreen = (w, h, draw) => {
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    draw(c.getContext('2d'), w, h);
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+    return t;
+  };
+  const SCREEN_CONTENT = {
+    wall_0: () => screenTex('hero-collage.jpg', 2.44),
+    wall_1: () => screenTex('hero-collage.jpg', 2.44),
+    block_0: () => screenTex('hero-batman.jpg', 1.0),
+    block_1: () => screenTex('deathstroke.jpg', 1.0),
+    block_2: () => screenTex('media-main.jpg', 1.0),
+    distributor_0: () => videoScreen(), distributor_1: () => videoScreen(),
+    map: () => canvasScreen(1024, 600, (g, w, h) => {
+      g.fillStyle = '#0a1420'; g.fillRect(0, 0, w, h);
+      g.fillStyle = '#7fd4ff'; g.font = '900 150px Arial'; g.textAlign = 'center';
+      g.fillText('MERUGU', w / 2, 240);
+      g.fillStyle = '#e8f4ff'; g.font = '700 74px Arial';
+      g.fillText('PROJECT ZERO', w / 2, 360);
+      g.fillStyle = '#5f7d95'; g.font = '600 52px Arial';
+      g.fillText('FIND ALL 7 ZONES', w / 2, 480);
+    }),
+    barrier: () => canvasScreen(2048, 536, (g, w, h) => {
+      g.fillStyle = '#0d0d10'; g.fillRect(0, 0, w, h);
+      g.fillStyle = '#ffb02e'; g.font = '900 190px Arial'; g.textAlign = 'center';
+      g.fillText('PROJECT ZERO ★ DRIVE THE CITY ★ PROJECT ZERO', w / 2, 340);
+    }),
+  };
+  function videoScreen() {
+    const v = document.createElement('video');
+    v.src = new URL('assets/screens/dragon-studio.mp4', document.baseURI).href;
+    v.muted = true; v.loop = true; v.playsInline = true; v.autoplay = true;
+    v.play().catch(() => {});
+    const tex = new THREE.VideoTexture(v);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    v.addEventListener('loadedmetadata', () => coverFit(tex, 1.75, v.videoWidth, v.videoHeight));
+    return tex;
+  }
+  const screenMatCache = new Map();
+  const screenMaterialFor = (part) => {
+    if (!SCREEN_CONTENT[part]) return null;
+    if (!screenMatCache.has(part)) {
+      const m = new THREE.MeshBasicMaterial({ map: SCREEN_CONTENT[part]() });
+      m.color.setRGB(1.12, 1.12, 1.12);
+      screenMatCache.set(part, m);
+    }
+    return screenMatCache.get(part);
+  };
+
   function buildKit(kitScene) {
     // Templates: one flat group of raw-geometry meshes per part. Screen
     // materials get a small authored boost so the bright signage crosses
@@ -167,7 +229,7 @@ export function buildWorld(scene, physics) {
       root.traverse((o) => {
         if (!o.isMesh) return;
         if (o.name.includes('collision')) return;
-        const m = new THREE.Mesh(o.geometry, o.name.includes('screen') ? boostMat(o.material) : o.material);
+        const m = new THREE.Mesh(o.geometry, o.name.includes('screen') ? (screenMaterialFor(root.name) || boostMat(o.material)) : o.material);
         m.matrixAutoUpdate = false;
         g.add(m);
       });
